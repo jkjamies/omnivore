@@ -1,0 +1,53 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run tests and generate coverage
+        working-directory: test-rig
+        run: ./gradlew test omnivoreReport
+
+      - name: Upload coverage to dashboard (main branch)
+        if: github.ref == 'refs/heads/main'
+        working-directory: test-rig
+        run: |
+          curl -s -X POST \
+            "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage" \
+            -H "Content-Type: application/json" \
+            -d @build/reports/omnivore/omnivore-report.json
+
+      - name: Upload coverage with PR comment
+        if: github.event_name == 'pull_request'
+        working-directory: test-rig
+        run: |
+          curl -s -X POST \
+            "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}&base_branch=main" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
+            -d @build/reports/omnivore/omnivore-report.json
+
+      - name: Upload coverage report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnivore-coverage-report
+          path: test-rig/build/reports/omnivore/

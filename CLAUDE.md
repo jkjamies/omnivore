@@ -51,13 +51,14 @@ cd test-rig && ./gradlew test omnivoreReport
 4. `omnivoreUpload` task POSTs report to `POST /api/v1/ingest/coverage`
 5. Dashboard auto-creates projects, stores snapshots in SQLite
 6. HTMX frontend shows project list, coverage trends (Chart.js), and file breakdown
-7. If PR metadata is provided, dashboard posts a Markdown coverage comment to the GitHub PR
+7. File coverage page fetches source code on-demand from GitHub API (`github_repo` field on projects, `GITHUB_TOKEN` env var) and displays with coverage gutter marks
+8. If PR metadata is provided, dashboard posts a Markdown coverage comment to the GitHub PR
 
 ## Report Format (OmnivoreReport)
 
-Top-level fields: `version`, `format` ("omnivore"), `project` (id, name, commitSha, branch, target), `coverage` (lineRate, branchRate, counts), `files` (per-file line-level coverage).
+Top-level fields: `version`, `format` ("omnivore"), `project` (id, name, commitSha, branch, target), `coverage` (lineRate, branchRate, counts), `files` (per-file line-level coverage with optional `sourceContent` field).
 
-Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`.
+Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`. Target is auto-detected based on coverage source type.
 
 ## Dependency Graph
 

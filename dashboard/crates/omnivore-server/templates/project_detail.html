@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.name }} — Omnivore{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">Projects</a> / {{ project.name }}
+</div>
+
+<div class="page-header">
+  <h1>{{ project.name }}</h1>
+  {% if let Some(snap) = latest %}
+  <div class="meta">
+    {% if let Some(sha) = snap.commit_sha %}
+    <span class="meta-item">Commit: <code>{{ self.short_sha(sha) }}</code></span>
+    {% endif %}
+    {% if let Some(branch) = snap.branch %}
+    <span class="meta-item">Branch: <strong>{{ branch }}</strong></span>
+    {% endif %}
+    <span class="meta-item">Target: {{ snap.target }}</span>
+    <span class="meta-item">{{ snap.created_at.format("%b %d, %Y %H:%M UTC") }}</span>
+  </div>
+  {% endif %}
+</div>
+
+{% if let Some(snap) = latest %}
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-label">Line Coverage</div>
+    <div class="stat-value" style="color:{{ self.rate_color(snap.line_rate) }}">{{ self.fmt_pct(snap.line_rate) }}%</div>
+    <div class="coverage-bar">
+      <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(snap.line_rate) }}%;background:{{ self.rate_color(snap.line_rate) }};"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">{{ snap.lines_covered }} / {{ snap.lines_total }} lines</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Branch Coverage</div>
+    <div class="stat-value" style="color:{{ self.rate_color(snap.branch_rate) }}">{{ self.fmt_pct(snap.branch_rate) }}%</div>
+    <div class="coverage-bar">
+      <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(snap.branch_rate) }}%;background:{{ self.rate_color(snap.branch_rate) }};"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">{{ snap.branches_covered }} / {{ snap.branches_total }} branches</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Files</div>
+    <div class="stat-value">{{ snap.file_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Status</div>
+    <div style="margin-top:8px;">
+      {% if snap.line_rate >= 0.8 %}
+      <span class="badge badge-green">Passing</span>
+      {% else if snap.line_rate >= 0.5 %}
+      <span class="badge badge-yellow">Warning</span>
+      {% else %}
+      <span class="badge badge-red">Failing</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if has_dependencies %}
+<div style="margin-bottom:16px;">
+  <a href="/projects/{{ project.id }}/dependencies" class="btn">View Dependency Graph</a>
+</div>
+{% endif %}
+
+{% if !trend.is_empty() && trend.len() > 1 %}
+<div class="card">
+  <div class="card-header">
+    <h2>Coverage Trend</h2>
+  </div>
+  <div class="chart-container">
+    <canvas id="trendChart"></canvas>
+  </div>
+</div>
+{% endif %}
+
+{% if !files.is_empty() %}
+<div class="card">
+  <div class="card-header">
+    <h2>File Breakdown</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th style="width:140px;">Line Coverage</th>
+          <th style="width:140px;">Branch Coverage</th>
+          <th style="width:180px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in files %}
+        <tr>
+          <td><a href="/projects/{{ project.id }}/files/{{ f.path }}" class="file-path">{{ f.path }}</a></td>
+          <td>
+            <span style="font-weight:600;color:{{ self.rate_color(f.line_rate) }}">{{ self.fmt_pct(f.line_rate) }}%</span>
+          </td>
+          <td>
+            <span style="font-weight:600;color:{{ self.rate_color(f.branch_rate) }}">{{ self.fmt_pct(f.branch_rate) }}%</span>
+          </td>
+          <td>
+            <div class="coverage-bar">
+              <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(f.line_rate) }}%;background:{{ self.rate_color(f.line_rate) }};"></div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <h3>No coverage data</h3>
+  <p>This project has no coverage snapshots yet. Run tests with the Omnivore plugin and upload the report.</p>
+</div>
+{% endif %}
+
+{% if !trend.is_empty() && trend.len() > 1 %}
+<script>
+(function() {
+  const trend = {{ self.trend_json()|safe }};
+  const labels = trend.map(p => {
+    const d = new Date(p.created_at);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  });
+  const lineData = trend.map(p => (p.line_rate * 100).toFixed(1));
+  const branchData = trend.map(p => (p.branch_rate * 100).toFixed(1));
+
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  const textColor = isDark ? '#8b8fa3' : '#6c757d';
+
+  new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Line %',
+          data: lineData,
+          borderColor: '#4361ee',
+          backgroundColor: 'rgba(67,97,238,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        },
+        {
+          label: 'Branch %',
+          data: branchData,
+          borderColor: '#2ecc71',
+          backgroundColor: 'rgba(46,204,113,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { labels: { color: textColor, usePointStyle: true, pointStyle: 'circle' } }
+      },
+      scales: {
+        y: {
+          min: 0,
+          max: 100,
+          grid: { color: gridColor },
+          ticks: { color: textColor, callback: v => v + '%' }
+        },
+        x: {
+          grid: { display: false },
+          ticks: { color: textColor }
+        }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

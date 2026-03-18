@@ -1,0 +1,98 @@
+plugins {
+    alias(libs.plugins.kotlin.jvm)
+    `java-gradle-plugin`
+    `maven-publish`
+    signing
+}
+
+dependencies {
+    implementation(project(":omnivore-agent"))
+
+    // Gradle API is provided by java-gradle-plugin
+    compileOnly(libs.agp)
+    compileOnly(libs.kotlin.gradle.plugin)
+
+    testImplementation(libs.junit.jupiter)
+}
+
+gradlePlugin {
+    website.set("https://github.com/jkjamies/coverage-tool")
+    vcsUrl.set("https://github.com/jkjamies/coverage-tool.git")
+
+    plugins {
+        create("omnivore") {
+            id = "io.github.jkjamies.omnivore"
+            displayName = "Omnivore Coverage"
+            description = "Compose-aware code coverage for Android, Kotlin, and KMP projects"
+            implementationClass = "com.jkjamies.omnivore.gradle.OmnivorePlugin"
+            tags.set(listOf("coverage", "kotlin", "android", "compose", "kmp", "testing"))
+        }
+    }
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+// -- Publishing --
+
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
+publishing {
+    publications {
+        // The java-gradle-plugin automatically creates a "pluginMaven" publication.
+        // Configure it with POM metadata.
+        withType<MavenPublication> {
+            pom {
+                name.set("Omnivore Gradle Plugin")
+                description.set("Gradle plugin for Omnivore code coverage — Compose-aware coverage for Android, Kotlin, and KMP")
+                url.set("https://github.com/jkjamies/coverage-tool")
+                licenses {
+                    license {
+                        name.set("Apache License, Version 2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("jkjamies")
+                        name.set("jkjamies")
+                    }
+                }
+                scm {
+                    url.set("https://github.com/jkjamies/coverage-tool")
+                    connection.set("scm:git:git://github.com/jkjamies/coverage-tool.git")
+                    developerConnection.set("scm:git:ssh://github.com/jkjamies/coverage-tool.git")
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = "OSSRH"
+            val releasesUrl = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
+            val snapshotsUrl = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
+            url = if (version.toString().endsWith("SNAPSHOT")) snapshotsUrl else releasesUrl
+            credentials {
+                username = providers.environmentVariable("OSSRH_USERNAME").orNull
+                    ?: providers.gradleProperty("ossrhUsername").orNull
+                password = providers.environmentVariable("OSSRH_PASSWORD").orNull
+                    ?: providers.gradleProperty("ossrhPassword").orNull
+            }
+        }
+    }
+}
+
+signing {
+    isRequired = !version.toString().endsWith("SNAPSHOT")
+    val signingKey = providers.environmentVariable("GPG_SIGNING_KEY").orNull
+    val signingPassword = providers.environmentVariable("GPG_SIGNING_PASSWORD").orNull
+    if (signingKey != null && signingPassword != null) {
+        useInMemoryPgpKeys(signingKey, signingPassword)
+    }
+    sign(publishing.publications)
+}

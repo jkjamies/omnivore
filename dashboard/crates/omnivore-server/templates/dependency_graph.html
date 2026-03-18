@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+
+{% block title %}Dependencies — {{ project.name }} — Omnivore{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<style>
+  .graph-container {
+    position: relative;
+    width: 100%;
+    height: 600px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .graph-container svg {
+    width: 100%;
+    height: 100%;
+  }
+  .graph-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 6px;
+    z-index: 10;
+  }
+  .graph-controls button {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .graph-controls button:hover {
+    background: var(--surface);
+  }
+  .node-internal { fill: #4361ee; }
+  .node-external { fill: #6c757d; }
+  .node-label {
+    font-size: 11px;
+    fill: var(--text);
+    pointer-events: none;
+    text-anchor: middle;
+    dominant-baseline: central;
+  }
+  .edge-line { stroke: var(--border); stroke-width: 1.5; fill: none; }
+  .edge-line.config-api { stroke: #4361ee; stroke-width: 2; }
+  .edge-line.config-implementation { stroke: #6c757d; }
+  .edge-line.config-test { stroke: #2ecc71; stroke-dasharray: 4 2; }
+  .edge-line.config-transitive { stroke: var(--border); stroke-dasharray: 2 2; opacity: 0.5; }
+  .edge-line.config-compileOnly { stroke: #f39c12; stroke-dasharray: 6 3; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+  .legend-swatch { width: 16px; height: 3px; border-radius: 2px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .graph-stats { display: flex; gap: 24px; margin-bottom: 16px; }
+  .graph-stat { font-size: 14px; color: var(--text-muted); }
+  .graph-stat strong { color: var(--text); }
+
+  .arrow-internal { fill: #6c757d; }
+  .arrow-api { fill: #4361ee; }
+  .arrow-test { fill: #2ecc71; }
+  .arrow-transitive { fill: var(--border); }
+  .arrow-compileOnly { fill: #f39c12; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">Projects</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / Dependencies
+</div>
+
+<div class="page-header">
+  <h1>Dependency Graph</h1>
+</div>
+
+<div class="graph-stats">
+  <div class="graph-stat"><strong>{{ graph.modules.len() }}</strong> modules</div>
+  <div class="graph-stat"><strong>{{ graph.edges.len() }}</strong> edges</div>
+  <div class="graph-stat"><strong>{{ self.internal_count() }}</strong> internal</div>
+</div>
+
+<div class="graph-container" id="graphContainer">
+  <div class="graph-controls">
+    <button onclick="resetZoom()">Reset</button>
+    <button onclick="toggleLabels()">Labels</button>
+  </div>
+  <svg id="graphSvg"></svg>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#4361ee;"></div> Internal module</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#6c757d;"></div> External dependency</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#4361ee;"></div> api</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#6c757d;"></div> implementation</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#2ecc71;"></div> test</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#f39c12;"></div> compileOnly</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--border); opacity:0.5;"></div> transitive</div>
+</div>
+
+<script>
+(function() {
+  const data = {{ self.graph_json()|safe }};
+  const container = document.getElementById('graphContainer');
+  const svg = d3.select('#graphSvg');
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+
+  // Build node/link arrays for D3
+  const nodeMap = new Map();
+  data.modules.forEach((m, i) => {
+    nodeMap.set(m.id, i);
+  });
+
+  const nodes = data.modules.map(m => ({
+    id: m.id,
+    name: m.name,
+    type: m.type,
+    group: m.group || '',
+    version: m.version || '',
+  }));
+
+  const links = data.edges
+    .filter(e => nodeMap.has(e.from) && nodeMap.has(e.to))
+    .map(e => ({
+      source: nodeMap.get(e.from),
+      target: nodeMap.get(e.to),
+      config: e.configuration,
+    }));
+
+  // SVG setup
+  const g = svg.append('g');
+
+  // Arrow markers
+  const configs = ['implementation', 'api', 'test', 'transitive', 'compileOnly'];
+  const arrowColors = { implementation: '#6c757d', api: '#4361ee', test: '#2ecc71', transitive: '#999', compileOnly: '#f39c12' };
+
+  const defs = svg.append('defs');
+  configs.forEach(c => {
+    defs.append('marker')
+      .attr('id', 'arrow-' + c)
+      .attr('viewBox', '0 -3 6 6')
+      .attr('refX', 18)
+      .attr('refY', 0)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .append('path')
+      .attr('d', 'M0,-3L6,0L0,3')
+      .attr('fill', arrowColors[c] || '#999');
+  });
+
+  // Links
+  const link = g.append('g')
+    .selectAll('line')
+    .data(links)
+    .enter()
+    .append('line')
+    .attr('class', d => 'edge-line config-' + d.config)
+    .attr('marker-end', d => 'url(#arrow-' + d.config + ')');
+
+  // Nodes
+  const node = g.append('g')
+    .selectAll('circle')
+    .data(nodes)
+    .enter()
+    .append('circle')
+    .attr('r', d => d.type === 'INTERNAL' ? 10 : 6)
+    .attr('class', d => d.type === 'INTERNAL' ? 'node-internal' : 'node-external')
+    .call(d3.drag()
+      .on('start', dragstarted)
+      .on('drag', dragged)
+      .on('end', dragended));
+
+  node.append('title')
+    .text(d => d.type === 'EXTERNAL' ? `${d.group}:${d.name}:${d.version}` : d.id);
+
+  // Labels
+  let showLabels = true;
+  const label = g.append('g')
+    .selectAll('text')
+    .data(nodes)
+    .enter()
+    .append('text')
+    .attr('class', 'node-label')
+    .attr('dy', d => d.type === 'INTERNAL' ? -16 : -10)
+    .text(d => d.name);
+
+  // Force simulation
+  const simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).distance(80).strength(0.5))
+    .force('charge', d3.forceManyBody().strength(-200))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(20))
+    .on('tick', ticked);
+
+  function ticked() {
+    link
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
+    node
+      .attr('cx', d => d.x)
+      .attr('cy', d => d.y);
+    label
+      .attr('x', d => d.x)
+      .attr('y', d => d.y);
+  }
+
+  // Zoom
+  const zoom = d3.zoom()
+    .scaleExtent([0.2, 5])
+    .on('zoom', e => g.attr('transform', e.transform));
+  svg.call(zoom);
+
+  window.resetZoom = function() {
+    svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity);
+  };
+
+  window.toggleLabels = function() {
+    showLabels = !showLabels;
+    label.style('display', showLabels ? null : 'none');
+  };
+
+  // Drag handlers
+  function dragstarted(event, d) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    d.fx = d.x;
+    d.fy = d.y;
+  }
+  function dragged(event, d) {
+    d.fx = event.x;
+    d.fy = event.y;
+  }
+  function dragended(event, d) {
+    if (!event.active) simulation.alphaTarget(0);
+    d.fx = null;
+    d.fy = null;
+  }
+})();
+</script>
+{% endblock %}

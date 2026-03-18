@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}{{ file_path }} — {{ project.name }} — Omnivore{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">Projects</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / File
+</div>
+
+<div class="page-header">
+  <h1 class="file-path" style="font-size:18px;">{{ file_path }}</h1>
+  <div class="meta" style="margin-top:8px;">
+    <span class="meta-item">
+      Line Coverage:
+      <strong style="color:{{ self.rate_color(file.line_rate) }}">{{ self.fmt_pct(file.line_rate) }}%</strong>
+    </span>
+    <span class="meta-item">
+      Branch Coverage:
+      <strong style="color:{{ self.rate_color(file.branch_rate) }}">{{ self.fmt_pct(file.branch_rate) }}%</strong>
+    </span>
+    <span class="meta-item">
+      {{ self.covered_count() }} / {{ self.total_count() }} lines covered
+    </span>
+  </div>
+  <div style="margin-top:12px;">
+    <div class="coverage-bar" style="max-width:400px;">
+      <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(file.line_rate) }}%;background:{{ self.rate_color(file.line_rate) }};"></div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden;">
+  <div class="card-header" style="padding:16px 20px;margin-bottom:0;border-bottom:1px solid var(--border);">
+    <h2>{% if self.has_source() %}Source{% else %}Coverage Map{% endif %}</h2>
+    <div class="source-legend">
+      <span class="legend-item"><span class="legend-swatch legend-covered"></span> Covered</span>
+      <span class="legend-item"><span class="legend-swatch legend-uncovered"></span> Not covered</span>
+      <span class="legend-item"><span class="legend-swatch legend-none"></span> Not instrumented</span>
+    </div>
+  </div>
+  <div class="source-view">
+    <table class="source-table">
+      <tbody>
+        {% for line in self.line_rows() %}
+        <tr class="{{ line.css_class }}">
+          <td class="line-gutter">
+            {% match line.status %}
+              {% when LineStatus::Covered %}
+                <span class="gutter-mark gutter-covered"></span>
+              {% when LineStatus::Uncovered %}
+                <span class="gutter-mark gutter-uncovered"></span>
+              {% when LineStatus::None %}
+              {% endmatch %}
+          </td>
+          <td class="line-num">{{ line.number }}</td>
+          <td class="line-hits">
+            {% match line.status %}
+              {% when LineStatus::Covered %}
+                <span class="hit-badge hit-covered">{{ line.hits }}x</span>
+              {% when LineStatus::Uncovered %}
+                <span class="hit-badge hit-uncovered">0x</span>
+              {% when LineStatus::None %}
+              {% endmatch %}
+          </td>
+          <td class="line-code"><pre>{{ line.code }}</pre></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if !self.has_source() %}
+<div style="margin-top:12px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text-muted);">
+  Source code not embedded in this report. Coverage map shows which lines are covered (green), uncovered (red), or not instrumented (no marker).
+</div>
+{% endif %}
+{% endblock %}

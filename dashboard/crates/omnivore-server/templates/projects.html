@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Projects — Omnivore{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Projects</h1>
+  <p>Coverage overview for all registered projects</p>
+</div>
+
+{% if projects.is_empty() %}
+<div class="empty-state">
+  <h3>No projects yet</h3>
+  <p>Ingest a coverage report to get started. Run your tests with the Omnivore plugin, then POST the report to <code>/api/v1/ingest/coverage</code>.</p>
+</div>
+{% else %}
+  {% for item in projects %}
+  <a href="/projects/{{ item.project.id }}" style="text-decoration:none;color:inherit;">
+    <div class="card" style="cursor:pointer;">
+      <div class="project-row">
+        <div class="project-info">
+          <div class="project-name">{{ item.project.name }}</div>
+          <div class="project-id">{{ item.project.id }}</div>
+          {% if let Some(desc) = item.project.description %}
+          <div style="font-size:13px;color:var(--text-muted);margin-top:2px;">{{ desc }}</div>
+          {% endif %}
+        </div>
+        <div class="project-coverage">
+          {% if let Some(snap) = item.latest %}
+            <div class="project-rate" style="color:{{ self.rate_color(snap.line_rate) }}">
+              {{ self.fmt_pct(snap.line_rate) }}%
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);">line coverage</div>
+            <div class="coverage-bar">
+              <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(snap.line_rate) }}%;background:{{ self.rate_color(snap.line_rate) }};"></div>
+            </div>
+          {% else %}
+            <span class="badge badge-yellow">No data</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+{% endif %}
+{% endblock %}
