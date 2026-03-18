@@ -1,18 +1,73 @@
-# Omnivore
+# CLAUDE.md
 
-Compose-aware code coverage platform replacing JaCoCo + SonarQube for Android, Kotlin, and KMP projects.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+Omnivore — compose-aware code coverage platform replacing JaCoCo + SonarQube for Android, Kotlin, and KMP projects. Also ingests lcov and llvm-cov formats for any language.
 
 ## Architecture
 
 ```
 coverage-plugin/     Gradle plugin + JVM agent (Kotlin, multi-module Gradle build)
-dashboard/           REST API + HTMX frontend (Rust workspace, Axum + Askama)
-test-rig/            Sample project for testing the plugin
+dashboard/           REST API + HTMX frontend (Rust workspace, Axum + Askama + SQLite)
+test-rig/            Sample Kotlin project for end-to-end plugin testing
 schema/              Shared data format definitions (planned)
 .github/workflows/   CI (coverage.yml) and publish (publish.yml) workflows
 ```
 
-**Data flow:** Plugin instruments bytecode → agent collects probe data during tests → report task generates `omnivore-report.json` → `omnivoreUpload` task POSTs to dashboard → dashboard ingests via REST API → stores in SQLite → HTMX frontend displays trends + file breakdown.
+Each sub-project has its own `CLAUDE.md` with detailed architecture, build commands, and conventions. See those for component-specific guidance.
+
+**Data flow:** Plugin instruments bytecode (JVM agent) → agent collects probe data during tests → `omnivoreReport` task generates `omnivore-report.json` → `omnivoreUpload` task POSTs to dashboard → dashboard ingests via REST API → stores in SQLite → HTMX frontend displays trends + file breakdown.
+
+## Quick Reference
+
+### Build Everything
+
+```sh
+# Plugin (Gradle 8.12, Kotlin 2.1.10, Java 17)
+cd coverage-plugin && ./gradlew build
+
+# Dashboard (Rust 2024 edition — DATABASE_URL required for sqlx compile-time checks)
+cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
+
+# Test rig (requires plugin build first — uses composite build)
+cd test-rig && ./gradlew test omnivoreReport
+```
+
+### Run Tests
+
+```sh
+# Plugin — all tests
+cd coverage-plugin && ./gradlew test
+
+# Plugin — single test class or method
+cd coverage-plugin && ./gradlew :omnivore-agent-tests:test --tests ComposeDetectorTest
+cd coverage-plugin && ./gradlew :omnivore-agent-tests:test --tests "*.ComposeDetectorTest.testMethodName"
+
+# Dashboard — all tests
+cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo test
+
+# Dashboard — single test
+cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo test test_ingest_omnivore_format
+```
+
+### Run Dashboard Locally
+
+```sh
+cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
+# Starts on http://localhost:3000
+```
+
+### End-to-End Flow (test-rig → dashboard)
+
+```sh
+# 1. Start dashboard (separate terminal)
+cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
+
+# 2. Build plugin, run tests, generate report, upload
+cd test-rig && ./gradlew test omnivoreReport omnivoreUpload
+```
 
 ## Conventions
 
@@ -20,61 +75,12 @@ schema/              Shared data format definitions (planned)
 - License: **Apache-2.0**
 - Version: `0.1.0-SNAPSHOT` (plugin), `0.1.0` (dashboard)
 - Gradle plugin ID: `io.github.jkjamies.omnivore`
-- Group ID: `io.github.jkjamies` (free via GitHub username verification)
-- Binary formats: `.omnivore` (execution data), `.probes` (probe maps)
-- Report format: `omnivore-report.json` (kotlinx-serialization ↔ serde, camelCase field names)
-
-## Building
-
-```sh
-# Plugin + agent
-cd coverage-plugin && ./gradlew build
-
-# Dashboard (needs DATABASE_URL for sqlx compile-time checks)
-cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
-
-# Test rig (requires plugin build first)
-cd test-rig && ./gradlew test omnivoreReport
-```
+- Group ID: `io.github.jkjamies`
+- Report format: `omnivore-report.json` — camelCase fields, kotlinx-serialization (Kotlin) ↔ serde (Rust)
+- Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`
 
 ## CI/CD
 
-- **`coverage.yml`** — runs on push to `main`: build, test, generate report, upload to dashboard, save artifacts
-- **`publish.yml`** — runs on `v*` tags: publish agent to Maven Central (OSSRH), plugin to Maven Central + Gradle Plugin Portal
+- **`coverage.yml`** — push to `main` + PRs: build test-rig, generate report, upload to dashboard
+- **`publish.yml`** — `v*` tags: publish agent + plugin to Maven Central (OSSRH) + Gradle Plugin Portal
 - See `coverage-plugin/PUBLISHING-REQUIRED.md` for one-time setup checklist
-
-## Component Interaction
-
-1. `coverage-plugin` instruments bytecode (JVM agent for unit tests, AGP transform for Android)
-2. Agent collects probe data during test execution
-3. `omnivoreReport` task merges unit + instrumented coverage, generates `omnivore-report.json`
-4. `omnivoreUpload` task POSTs report to `POST /api/v1/ingest/coverage`
-5. Dashboard auto-creates projects, stores snapshots in SQLite
-6. HTMX frontend shows project list, coverage trends (Chart.js), and file breakdown
-7. File coverage page fetches source code on-demand from GitHub API (`github_repo` field on projects, `GITHUB_TOKEN` env var) and displays with coverage gutter marks
-8. If PR metadata is provided, dashboard posts a Markdown coverage comment to the GitHub PR
-
-## Report Format (OmnivoreReport)
-
-Top-level fields: `version`, `format` ("omnivore"), `project` (id, name, commitSha, branch, target), `coverage` (lineRate, branchRate, counts), `files` (per-file line-level coverage with optional `sourceContent` field).
-
-Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`. Target is auto-detected based on coverage source type.
-
-## Dependency Graph
-
-The plugin can optionally resolve and embed a dependency graph in the report. The dashboard stores it and provides a D3.js force-directed visualization at `/projects/{id}/dependencies`.
-
-DSL: `omnivore { dependencies { enabled.set(true); includeExternal.set(true); includeTestDeps.set(false) } }`
-
-API: `GET /api/v1/coverage/{project_id}/dependencies`
-
-See `FUTURE-DEPENDENCY-GRAPHS.md` for multi-platform extension plans (Rust/Go/Swift/etc.).
-
-## Multi-Platform Ingestion
-
-The dashboard accepts coverage data in three formats via `POST /api/v1/ingest/coverage`:
-- **Omnivore JSON** — native format from the Gradle plugin (auto-detected)
-- **lcov** — `go test -coverprofile`, gcov/lcov (`?format=lcov&project_id=...&project_name=...`)
-- **llvm-cov export JSON** — `cargo llvm-cov --json`, Xcode (`?format=llvm-cov&project_id=...`)
-
-Format is auto-detected from content, or specified via `?format=` query parameter. Non-omnivore formats require project metadata via query params since they don't carry it natively.

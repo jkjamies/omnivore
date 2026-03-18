@@ -266,9 +266,14 @@ pub async fn file_coverage_page(
     if file.source_content.is_none() {
         if let Some(repo) = &project.github_repo {
             let token = std::env::var("GITHUB_TOKEN").ok();
+            // Prepend source_root to map JVM class paths to repo paths
+            let repo_path = match &project.source_root {
+                Some(root) => format!("{}/{}", root.trim_end_matches('/'), file_path),
+                None => file_path.clone(),
+            };
             let content = omnivore_core::github::source::fetch_source(
                 repo,
-                &file_path,
+                &repo_path,
                 latest.commit_sha.as_deref(),
                 token.as_deref(),
             )

@@ -27,6 +27,7 @@ impl Database {
                 name TEXT NOT NULL,
                 description TEXT,
                 github_repo TEXT,
+                source_root TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
@@ -92,6 +93,20 @@ impl Database {
                 .await?;
         }
 
+        // Migration: add source_root column to projects if missing
+        let has_source_root_col: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'source_root'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_source_root_col {
+            sqlx::query("ALTER TABLE projects ADD COLUMN source_root TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -100,13 +115,14 @@ impl Database {
     pub async fn create_project(&self, input: &CreateProject) -> Result<Project, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO projects (id, name, description, github_repo, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO projects (id, name, description, github_repo, source_root, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&input.id)
         .bind(&input.name)
         .bind(&input.description)
         .bind(&input.github_repo)
+        .bind(&input.source_root)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -123,6 +139,7 @@ impl Database {
             r#"SELECT id as "id!: String", name,
                       description as "description: String",
                       github_repo as "github_repo: String",
+                      source_root as "source_root: String",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects WHERE id = ?"#,
@@ -138,6 +155,7 @@ impl Database {
             r#"SELECT id as "id!: String", name,
                       description as "description: String",
                       github_repo as "github_repo: String",
+                      source_root as "source_root: String",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects ORDER BY name"#
@@ -146,16 +164,20 @@ impl Database {
         .await
     }
 
-    pub async fn update_project_github_repo(
+    pub async fn update_project_settings(
         &self,
         id: &str,
         github_repo: Option<&str>,
+        source_root: Option<&str>,
     ) -> Result<Option<Project>, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "UPDATE projects SET github_repo = ?, updated_at = ? WHERE id = ?",
+            "UPDATE projects SET github_repo = COALESCE(?, github_repo),
+                                 source_root = COALESCE(?, source_root),
+                                 updated_at = ? WHERE id = ?",
         )
         .bind(github_repo)
+        .bind(source_root)
         .bind(&now)
         .bind(id)
         .execute(&self.pool)
@@ -294,6 +316,7 @@ impl Database {
                     .to_string(),
                 description: None,
                 github_repo: None,
+                source_root: None,
             };
             self.create_project(&input).await?;
         }
