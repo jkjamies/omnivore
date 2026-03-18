@@ -17,3 +17,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "omnivore-test-rig"
+
+include(":core")
+include(":app")

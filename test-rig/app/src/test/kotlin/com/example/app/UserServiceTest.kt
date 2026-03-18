@@ -15,13 +15,22 @@ class UserServiceTest {
 
     @Test
     fun `addUser succeeds`() {
-        assertTrue(service.addUser(User(1, "Alice", "alice@example.com")))
+        val result = service.addUser(User(1, "Alice", "alice@example.com"))
+        assertTrue(result.isSuccess())
     }
 
     @Test
     fun `addUser rejects duplicate id`() {
         service.addUser(User(1, "Alice", "alice@example.com"))
-        assertFalse(service.addUser(User(1, "Bob", "bob@example.com")))
+        val result = service.addUser(User(1, "Bob", "bob@example.com"))
+        assertTrue(result.isFailure())
+    }
+
+    @Test
+    fun `addUser rejects invalid email`() {
+        val result = service.addUser(User(1, "Alice", "not-an-email"))
+        assertTrue(result.isFailure())
+        assertEquals("Invalid email", result.errorOrNull())
     }
 
     @Test

@@ -27,11 +27,16 @@ class OmnivorePlugin : Plugin<Project> {
             applyDefaults(project, extension)
         }
 
-        // Configure unit test coverage collection
+        // Configure coverage collection on this project and all subprojects
         UnitTestConfigurator.configure(project, extension)
-
-        // Configure Android instrumented test coverage collection
         InstrumentedTestConfigurator.configure(project, extension)
+
+        project.subprojects { subproject ->
+            subproject.afterEvaluate {
+                UnitTestConfigurator.configure(subproject, extension)
+                InstrumentedTestConfigurator.configure(subproject, extension)
+            }
+        }
 
         // Register the report generation task
         val reportTask = project.tasks.register("omnivoreReport", OmnivoreReportTask::class.java) { task ->
@@ -50,6 +55,10 @@ class OmnivorePlugin : Plugin<Project> {
             task.dependenciesIncludeExternal.convention(extension.dependencies.includeExternal.orElse(false))
             task.dependenciesIncludeTestDeps.convention(extension.dependencies.includeTestDeps.orElse(false))
 
+            // Depend on all subproject test tasks so coverage data is available
+            project.subprojects { sub ->
+                task.dependsOn(sub.tasks.withType(org.gradle.api.tasks.testing.Test::class.java))
+            }
         }
 
         // Register the upload task

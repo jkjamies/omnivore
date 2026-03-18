@@ -1,11 +1,11 @@
 plugins {
-    kotlin("jvm") version "2.1.10"
+    kotlin("jvm") version "2.1.10" apply false
     id("io.github.jkjamies.omnivore")
 }
 
 omnivore {
     composeFilter {
-        enabled.set(false) // No Compose in this test rig
+        enabled.set(false)
     }
     reports {
         json { enabled.set(true) }
@@ -20,14 +20,18 @@ omnivore {
     }
 }
 
-dependencies {
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-}
+subprojects {
+    apply(plugin = "org.jetbrains.kotlin.jvm")
 
-tasks.withType<Test> {
-    useJUnitPlatform()
-}
+    configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension> {
+        jvmToolchain(17)
+    }
 
-kotlin {
-    jvmToolchain(17)
+    dependencies {
+        "testImplementation"("org.junit.jupiter:junit-jupiter:5.11.4")
+    }
+
+    tasks.withType<Test> {
+        useJUnitPlatform()
+    }
 }

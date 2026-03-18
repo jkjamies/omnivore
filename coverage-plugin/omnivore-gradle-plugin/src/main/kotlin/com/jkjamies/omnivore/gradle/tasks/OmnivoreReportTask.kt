@@ -24,8 +24,7 @@ import java.io.File
  */
 abstract class OmnivoreReportTask : DefaultTask() {
 
-    @get:InputDirectory
-    @get:Optional
+    @get:Internal
     abstract val executionDataDir: DirectoryProperty
 
     @get:OutputDirectory

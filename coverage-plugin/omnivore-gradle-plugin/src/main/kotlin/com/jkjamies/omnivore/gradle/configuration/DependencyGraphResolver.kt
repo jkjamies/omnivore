@@ -63,29 +63,54 @@ object DependencyGraphResolver {
             if (includeTestDeps) addAll(TEST_CONFIGS)
         }
 
-        for (config in project.configurations) {
-            val configName = config.name
-            if (configName !in targetConfigs) continue
-            if (!config.isCanBeResolved) continue
+        // Walk configurations for this project and all subprojects
+        val projectsToScan = buildList {
+            add(project)
+            addAll(project.subprojects)
+        }
 
-            val resolved = try {
-                config.resolvedConfiguration
-            } catch (_: Exception) {
-                // Configuration may fail to resolve (e.g., missing dependency)
-                continue
+        for (scanProject in projectsToScan) {
+            val scanId = scanProject.path.ifEmpty { ":" }
+            // Ensure subproject nodes exist
+            if (scanId !in nodes) {
+                nodes[scanId] = ModuleNode(
+                    id = scanId,
+                    name = scanProject.name,
+                    type = ModuleType.INTERNAL,
+                )
             }
 
-            for (dep in resolved.firstLevelModuleDependencies) {
-                walkDependency(
-                    dep = dep,
-                    parentId = rootId,
-                    configLabel = simplifyConfigName(configName),
-                    nodes = nodes,
-                    edges = edges,
-                    includeExternal = includeExternal,
-                    visited = mutableSetOf(),
-                    internalGroupIds = internalGroupIds,
-                )
+            for (config in scanProject.configurations) {
+                val configName = config.name
+                if (configName !in targetConfigs) continue
+                if (!config.isCanBeResolved) continue
+
+                val resolved = try {
+                    config.resolvedConfiguration
+                } catch (_: Exception) {
+                    continue
+                }
+
+                for (dep in resolved.firstLevelModuleDependencies) {
+                    walkDependency(
+                        dep = dep,
+                        parentId = scanId,
+                        configLabel = simplifyConfigName(configName),
+                        nodes = nodes,
+                        edges = edges,
+                        includeExternal = includeExternal,
+                        visited = mutableSetOf(),
+                        internalGroupIds = internalGroupIds,
+                    )
+                }
+            }
+        }
+
+        // Remove root project node if it's just a container (has subprojects, no edges)
+        if (project.subprojects.isNotEmpty()) {
+            val hasEdges = edges.any { it.from == rootId || it.to == rootId }
+            if (!hasEdges) {
+                nodes.remove(rootId)
             }
         }
 

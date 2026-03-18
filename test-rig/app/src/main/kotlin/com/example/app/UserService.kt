@@ -1,7 +1,11 @@
 package com.example.app
 
+import com.example.core.OpResult
+import com.example.core.Validation
+
 /**
  * A small service with data classes and logic — realistic coverage target.
+ * Uses core module for validation and result types.
  */
 data class User(
     val id: Int,
@@ -14,12 +18,22 @@ class UserService {
 
     private val users = mutableListOf<User>()
 
-    fun addUser(user: User): Boolean {
-        if (users.any { it.id == user.id }) {
-            return false
+    fun addUser(user: User): OpResult<User> {
+        if (!Validation.isValidId(user.id)) {
+            return OpResult.Failure("Invalid user ID")
         }
-        users.add(user)
-        return true
+        if (!Validation.isValidName(user.name)) {
+            return OpResult.Failure("Invalid name")
+        }
+        if (!Validation.isValidEmail(user.email)) {
+            return OpResult.Failure("Invalid email")
+        }
+        if (users.any { it.id == user.id }) {
+            return OpResult.Failure("User already exists")
+        }
+        val sanitized = user.copy(name = Validation.sanitize(user.name))
+        users.add(sanitized)
+        return OpResult.Success(sanitized)
     }
 
     fun getUser(id: Int): User? {

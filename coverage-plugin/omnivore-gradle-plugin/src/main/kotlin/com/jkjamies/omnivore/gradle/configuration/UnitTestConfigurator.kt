@@ -14,12 +14,16 @@ import java.io.File
 object UnitTestConfigurator {
 
     fun configure(project: Project, extension: OmnivoreExtension) {
+        // Write coverage data to the root project's build/omnivore/ so the
+        // report task can find data from all subprojects in one place.
+        val rootProject = project.rootProject
+
         project.tasks.withType(Test::class.java).configureEach { testTask ->
             val agentJar = resolveAgentJar()
 
             if (agentJar != null) {
-                val destFile = project.layout.buildDirectory
-                    .file("omnivore/${testTask.name}/coverage.omnivore")
+                val destFile = rootProject.layout.buildDirectory
+                    .file("omnivore/${project.path.replace(':', '/')}/${testTask.name}/coverage.omnivore")
                     .get().asFile
 
                 val agentArgs = buildString {
