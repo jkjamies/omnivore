@@ -79,6 +79,13 @@ class ProbeInserter(
         }
     }
 
+    override fun visitMaxs(maxStack: Int, maxLocals: Int) {
+        // Probe insertion adds GETSTATIC + index + ICONST_1 + BASTORE = 3 extra stack slots.
+        // Bump max stack to accommodate probes inserted at any point in the method.
+        val adjustedMaxStack = if (localProbeCount > 0) maxStack + 3 else maxStack
+        super.visitMaxs(adjustedMaxStack, maxLocals)
+    }
+
     companion object {
         const val PROBE_FIELD_NAME = "\$omnivoreProbes"
         const val PROBE_FIELD_DESCRIPTOR = "[Z"

@@ -106,15 +106,17 @@ abstract class OmnivoreClassVisitorFactory :
     private fun isInfrastructureClass(className: String): Boolean {
         val skipPrefixes = arrayOf(
             "java.", "javax.", "jdk.", "sun.",
-            "kotlin.", "kotlinx.",
+            "kotlin.", "kotlinx.", "_COROUTINE.",
             "org.gradle.", "worker.",
             "org.junit.", "org.hamcrest.", "org.assertj.", "org.mockito.",
-            "org.testng.", "io.mockk.",
+            "org.testng.", "io.mockk.", "io.kotest.",
             "org.objectweb.asm.",
+            "org.apache.commons.", "org.apache.http.",
+            "com.google.", "io.netty.", "io.grpc.",
+            "com.fasterxml.", "com.squareup.",
+            "org.jetbrains.annotations.",
             "android.", "dalvik.",
-            "androidx.compose.runtime.", "androidx.compose.ui.",
-            "androidx.compose.foundation.", "androidx.compose.material",
-            "androidx.annotation.", "androidx.collection.",
+            "androidx.",
             "com.jkjamies.omnivore.agent.",
         )
         return skipPrefixes.any { className.startsWith(it) }
@@ -150,7 +152,7 @@ private class OmnivoreInstrumentingVisitor(
     private var globalProbeOffset = 0
     private var hasExistingClinit = false
     private var totalProbeCount = 0
-    private var classNode: ClassNode? = null
+    private var isInterface = false
 
     override fun visit(
         version: Int,
@@ -160,6 +162,7 @@ private class OmnivoreInstrumentingVisitor(
         superName: String?,
         interfaces: Array<out String>?,
     ) {
+        isInterface = (access and Opcodes.ACC_INTERFACE) != 0
         super.visit(version, access, name, signature, superName, interfaces)
     }
 
@@ -203,24 +206,27 @@ private class OmnivoreInstrumentingVisitor(
     }
 
     override fun visitEnd() {
-        // Add the $omnivoreProbes static field
-        super.visitField(
-            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_TRANSIENT,
-            ProbeInserter.PROBE_FIELD_NAME,
-            ProbeInserter.PROBE_FIELD_DESCRIPTOR,
-            null,
-            null
-        )?.visitEnd()
+        // Interfaces cannot have ACC_TRANSIENT fields — skip instrumentation
+        if (!isInterface) {
+            // Add the $omnivoreProbes static field
+            super.visitField(
+                Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_TRANSIENT,
+                ProbeInserter.PROBE_FIELD_NAME,
+                ProbeInserter.PROBE_FIELD_DESCRIPTOR,
+                null,
+                null
+            )?.visitEnd()
 
-        // Generate <clinit> if the class doesn't have one
-        if (!hasExistingClinit && totalProbeCount > 0) {
-            val mv = super.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null)
-            if (mv != null) {
-                mv.visitCode()
-                emitProbeInit(mv, classId, className, totalProbeCount)
-                mv.visitInsn(Opcodes.RETURN)
-                mv.visitMaxs(3, 0)
-                mv.visitEnd()
+            // Generate <clinit> if the class doesn't have one
+            if (!hasExistingClinit && totalProbeCount > 0) {
+                val mv = super.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null)
+                if (mv != null) {
+                    mv.visitCode()
+                    emitProbeInit(mv, classId, className, totalProbeCount)
+                    mv.visitInsn(Opcodes.RETURN)
+                    mv.visitMaxs(4, 0)
+                    mv.visitEnd()
+                }
             }
         }
 

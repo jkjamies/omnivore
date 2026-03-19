@@ -36,8 +36,7 @@ object UnitTestConfigurator {
                     if (excludes.isNotEmpty()) {
                         append(",excludes=${excludes.joinToString(":")}")
                     }
-                    val composeEnabled = extension.composeFilter.enabled.getOrElse(true)
-                    append(",compose=$composeEnabled")
+                    append(",compose=true")
                 }
 
                 testTask.jvmArgs("-javaagent:${agentJar.absolutePath}=$agentArgs")

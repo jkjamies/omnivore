@@ -87,6 +87,25 @@ object OmnivoreTransformConfigurator {
                     }
                 )
 
+                // Tell AGP to recompute stack map frames for instrumented methods
+                try {
+                    val framesMode = Class.forName(
+                        "com.android.build.api.instrumentation.FramesComputationMode"
+                    )
+                    val computeFrames = framesMode.enumConstants.find {
+                        it.toString() == "COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS"
+                    }
+                    if (computeFrames != null) {
+                        val setFramesMethod = instrumentation.javaClass.getMethod(
+                            "setAsmFramesComputationMode",
+                            framesMode
+                        )
+                        setFramesMethod.invoke(instrumentation, computeFrames)
+                    }
+                } catch (e: Exception) {
+                    project.logger.info("Omnivore: Could not set frames computation mode: ${e.message}")
+                }
+
                 project.logger.lifecycle("Omnivore: Registered build-time bytecode transform for variant")
             }
         } catch (e: Exception) {
@@ -108,11 +127,11 @@ object OmnivoreTransformConfigurator {
             excludesProp.javaClass.getMethod("set", Any::class.java)
                 .invoke(excludesProp, extension.excludes.get())
 
-            // Set compose filter
+            // Set compose filter (always enabled — zero-cost on non-Compose projects)
             val composeMethod = params.javaClass.getMethod("getComposeFilterEnabled")
             val composeProp = composeMethod.invoke(params)
             composeProp.javaClass.getMethod("set", Any::class.java)
-                .invoke(composeProp, extension.composeFilter.enabled.getOrElse(true))
+                .invoke(composeProp, true)
         } catch (e: Exception) {
             // Parameters are optional — defaults will be used
         }

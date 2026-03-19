@@ -55,9 +55,20 @@ class OmnivorePlugin : Plugin<Project> {
             task.dependenciesIncludeExternal.convention(extension.dependencies.includeExternal.orElse(false))
             task.dependenciesIncludeTestDeps.convention(extension.dependencies.includeTestDeps.orElse(false))
 
-            // Depend on all subproject test tasks so coverage data is available
+            // Depend on all test tasks (this project + subprojects) so coverage data is available
+            task.dependsOn(project.tasks.withType(org.gradle.api.tasks.testing.Test::class.java))
             project.subprojects { sub ->
                 task.dependsOn(sub.tasks.withType(org.gradle.api.tasks.testing.Test::class.java))
+            }
+        }
+
+        // Wire instrumented test pull task dependencies after evaluation
+        project.afterEvaluate {
+            reportTask.configure { task ->
+                project.tasks.findByName("omnivorePullCoverage")?.let { task.dependsOn(it) }
+                project.subprojects.forEach { sub ->
+                    sub.tasks.findByName("omnivorePullCoverage")?.let { task.dependsOn(it) }
+                }
             }
         }
 
@@ -73,14 +84,6 @@ class OmnivorePlugin : Plugin<Project> {
     }
 
     private fun applyDefaults(project: Project, extension: OmnivoreExtension) {
-        // Auto-detect Compose and enable filtering
-        val hasCompose = project.plugins.hasPlugin("org.jetbrains.compose") ||
-            project.plugins.hasPlugin("org.jetbrains.kotlin.plugin.compose")
-
-        if (!extension.composeFilter.enabled.isPresent) {
-            extension.composeFilter.enabled.set(hasCompose)
-        }
-
         // Default report formats
         if (!extension.reports.json.enabled.isPresent) {
             extension.reports.json.enabled.set(true)

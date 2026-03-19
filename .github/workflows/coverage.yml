@@ -23,12 +23,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Run tests and generate coverage
-        working-directory: test-rig
+        working-directory: kmp-test-rig
         run: ./gradlew test omnivoreReport
 
       - name: Upload coverage to dashboard (main branch)
         if: github.ref == 'refs/heads/main'
-        working-directory: test-rig
+        working-directory: kmp-test-rig
         run: |
           curl -s -X POST \
             "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage" \
@@ -37,7 +37,7 @@ jobs:
 
       - name: Upload coverage with PR comment
         if: github.event_name == 'pull_request'
-        working-directory: test-rig
+        working-directory: kmp-test-rig
         run: |
           curl -s -X POST \
             "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}&base_branch=main" \
@@ -50,4 +50,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: omnivore-coverage-report
-          path: test-rig/build/reports/omnivore/
+          path: kmp-test-rig/build/reports/omnivore/

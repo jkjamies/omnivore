@@ -11,7 +11,8 @@ Omnivore — compose-aware code coverage platform replacing JaCoCo + SonarQube f
 ```
 coverage-plugin/     Gradle plugin + JVM agent (Kotlin, multi-module Gradle build)
 dashboard/           REST API + HTMX frontend (Rust workspace, Axum + Askama + SQLite)
-test-rig/            Sample Kotlin project for end-to-end plugin testing
+kmp-test-rig/        Multi-module KMP test project (unit tests, dependency graph)
+android-test-rig/    Android test project (unit + instrumented tests)
 schema/              Shared data format definitions (planned)
 .github/workflows/   CI (coverage.yml) and publish (publish.yml) workflows
 ```
@@ -31,8 +32,11 @@ cd coverage-plugin && ./gradlew build
 # Dashboard (Rust 2024 edition — DATABASE_URL required for sqlx compile-time checks)
 cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
 
-# Test rig (requires plugin build first — uses composite build)
-cd test-rig && ./gradlew test omnivoreReport
+# KMP test rig (requires plugin build first — uses composite build)
+cd kmp-test-rig && ./gradlew test omnivoreReport
+
+# Android test rig (requires plugin build first — uses composite build)
+cd android-test-rig && ./gradlew test omnivoreReport
 ```
 
 ### Run Tests
@@ -65,8 +69,11 @@ cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
 # 1. Start dashboard (separate terminal)
 cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
 
-# 2. Build plugin, run tests, generate report, upload
-cd test-rig && ./gradlew test omnivoreReport omnivoreUpload
+# 2. Build plugin, run tests, generate report, upload (KMP)
+cd kmp-test-rig && ./gradlew test omnivoreReport omnivoreUpload
+
+# 3. Or use Android test rig
+cd android-test-rig && ./gradlew test omnivoreReport omnivoreUpload
 ```
 
 ## Conventions
@@ -81,6 +88,6 @@ cd test-rig && ./gradlew test omnivoreReport omnivoreUpload
 
 ## CI/CD
 
-- **`coverage.yml`** — push to `main` + PRs: build test-rig, generate report, upload to dashboard
+- **`coverage.yml`** — push to `main` + PRs: build kmp-test-rig, generate report, upload to dashboard
 - **`publish.yml`** — `v*` tags: publish agent + plugin to Maven Central (OSSRH) + Gradle Plugin Portal
 - See `coverage-plugin/PUBLISHING-REQUIRED.md` for one-time setup checklist

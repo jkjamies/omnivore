@@ -30,8 +30,12 @@ object InstrumentedTestConfigurator {
     private const val DEVICE_COVERAGE_DIR = "/data/local/tmp/omnivore"
 
     fun configure(project: Project, extension: OmnivoreExtension) {
-        // Only configure if the user enabled instrumented tests
-        // and an Android plugin is applied
+        // NOTE: AGP build-time transform (OmnivoreTransformConfigurator) is NOT registered here.
+        // It transforms debug variant classes which are also used by unit tests, causing conflicts
+        // with the JVM agent (-javaagent). The transform will be revisited for instrumented-only builds.
+        // For now, instrumented test coverage relies on the agent being bootstrapped on-device.
+
+        // The rest must wait for afterEvaluate to check user config
         project.afterEvaluate {
             val enabled = extension.instrumentedTests.enabled.getOrElse(false)
             if (!enabled) return@afterEvaluate
@@ -66,7 +70,7 @@ object InstrumentedTestConfigurator {
         //    We inject a test listener that initializes the agent and flushes data.
         configureTestRunner(project, extension)
 
-        // 3. Register task to pull coverage files from device.
+        // 4. Register task to pull coverage files from device.
         registerPullTask(project)
 
         project.logger.lifecycle("Omnivore: Configured instrumented test coverage collection")
@@ -95,9 +99,8 @@ object InstrumentedTestConfigurator {
             // Tell the listener where to write data on device
             args["omnivore.destdir"] = DEVICE_COVERAGE_DIR
 
-            // Pass filter config
-            val composeEnabled = extension.composeFilter.enabled.getOrElse(true)
-            args["omnivore.compose"] = composeEnabled.toString()
+            // Compose filter is always enabled (zero-cost on non-Compose projects)
+            args["omnivore.compose"] = "true"
 
             val includes = extension.includes.get()
             if (includes.isNotEmpty()) {
@@ -122,15 +125,9 @@ object InstrumentedTestConfigurator {
      * into build/omnivore/connectedAndroidTest/ where OmnivoreReportTask can find them.
      */
     private fun registerPullTask(project: Project) {
-        project.tasks.register("omnivorePullCoverage") { task ->
+        val pullTask = project.tasks.register("omnivorePullCoverage") { task ->
             task.group = "omnivore"
             task.description = "Pull Omnivore coverage data from connected Android device"
-
-            // Run after connected android tests
-            project.tasks.matching { it.name.startsWith("connected") && it.name.endsWith("AndroidTest") }
-                .configureEach { testTask ->
-                    testTask.finalizedBy(task)
-                }
 
             task.doLast {
                 val outputDir = project.layout.buildDirectory
@@ -173,6 +170,12 @@ object InstrumentedTestConfigurator {
                 }
             }
         }
+
+        // Wire finalization: connected Android test tasks should finalize with pull
+        project.tasks.matching { it.name.startsWith("connected") && it.name.endsWith("AndroidTest") }
+            .all { testTask ->
+                testTask.finalizedBy(pullTask)
+            }
     }
 
     /**

@@ -49,6 +49,9 @@ class OmnivoreClassTransformer(
         // when their <clinit> tries to call OmnivoreRuntime.getProbes().
         if (loader != null && !canSeeRuntime(loader)) return null
 
+        // Skip classes from test source sets (e.g., build/classes/kotlin/test/)
+        if (isFromTestSourceSet(protectionDomain)) return null
+
         // Never instrument JDK, Kotlin stdlib, or other infrastructure
         if (shouldSkipInfrastructure(className)) return null
 
@@ -81,6 +84,15 @@ class OmnivoreClassTransformer(
         // First pass: analyze the class structure
         val classNode = ClassNode()
         reader.accept(classNode, ClassReader.EXPAND_FRAMES)
+
+        // Skip interfaces — adding static fields with ACC_TRANSIENT to interfaces is illegal
+        if ((classNode.access and Opcodes.ACC_INTERFACE) != 0) return null
+
+        // Skip classes already instrumented by AGP build-time transform.
+        // These classes already have $omnivoreProbes and their <clinit> calls
+        // OmnivoreRuntime.getProbes(), which registers the probe array with the
+        // ExecutionDataStore at class load time. No re-instrumentation needed.
+        if (classNode.fields?.any { it.name == ProbeInserter.PROBE_FIELD_NAME } == true) return null
 
         // Check class-level Compose patterns with full class info
         if (config.composeFilterEnabled && ComposeDetector.isGeneratedClass(classNode)) {
@@ -152,16 +164,45 @@ class OmnivoreClassTransformer(
         }
     }
 
+    /**
+     * Check if a class originates from a test source set by inspecting its code source location.
+     *
+     * Standard Gradle: build/classes/{language}/{sourceSet}/
+     * AGP (Android):   build/tmp/kotlin-classes/{sourceSet}/
+     *
+     * Test source sets: test, testDebug, testRelease, debugUnitTest, releaseUnitTest,
+     * androidTest, instrumentedTest, etc.
+     */
+    private fun isFromTestSourceSet(protectionDomain: ProtectionDomain?): Boolean {
+        val location = protectionDomain?.codeSource?.location?.path ?: return false
+        return TEST_SOURCE_SET_PATTERN.containsMatchIn(location)
+    }
+
+    companion object {
+        /** Matches Gradle and AGP test output directories. */
+        private val TEST_SOURCE_SET_PATTERN = Regex(
+            "/(classes/[^/]+|kotlin-classes)/((test|androidTest|instrumentedTest)[^/]*|[^/]*(UnitTest|AndroidTest))(/|$)"
+        )
+
+        fun classNameToId(className: String): Long {
+            var hash = 0L
+            for (char in className) {
+                hash = hash * 31 + char.code
+            }
+            return hash
+        }
+    }
+
     private fun shouldSkipInfrastructure(className: String): Boolean {
         val skipPrefixes = arrayOf(
             // JDK
             "java/", "javax/", "jdk/", "sun/",
             // Kotlin
-            "kotlin/", "kotlinx/",
+            "kotlin/", "kotlinx/", "_COROUTINE/",
             // Build tools & test frameworks
             "org/gradle/", "worker/",
             "org/junit/", "org/hamcrest/", "org/assertj/", "org/mockito/",
-            "org/testng/", "io/mockk/",
+            "org/testng/", "io/mockk/", "io/kotest/",
             // Gradle internal dependencies
             "com/esotericsoftware/", "org/objenesis/",
             // Logging
@@ -173,13 +214,9 @@ class OmnivoreClassTransformer(
             "com/google/", "io/netty/", "io/grpc/",
             "com/fasterxml/", "com/squareup/",
             "org/jetbrains/annotations/",
-            // Android / Compose
+            // Android / AndroidX / Compose
             "android/", "dalvik/",
-            "androidx/compose/runtime/",
-            "androidx/compose/ui/",
-            "androidx/compose/foundation/",
-            "androidx/compose/material",
-            "androidx/annotation/", "androidx/collection/",
+            "androidx/",
             // Our own agent
             "com/jkjamies/omnivore/agent/",
         )
@@ -205,15 +242,6 @@ class OmnivoreClassTransformer(
         return Regex(regex).matches(text)
     }
 
-    companion object {
-        fun classNameToId(className: String): Long {
-            var hash = 0L
-            for (char in className) {
-                hash = hash * 31 + char.code
-            }
-            return hash
-        }
-    }
 }
 
 /**
@@ -287,7 +315,7 @@ private class InstrumentingClassVisitor(
                 mv.visitCode()
                 emitProbeInit(mv, classId, className, totalProbeCount)
                 mv.visitInsn(Opcodes.RETURN)
-                mv.visitMaxs(3, 0)
+                mv.visitMaxs(4, 0)
                 mv.visitEnd()
             }
         }

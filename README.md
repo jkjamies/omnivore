@@ -10,7 +10,8 @@ Omnivore replaces JaCoCo + SonarQube with a purpose-built coverage pipeline: a G
 |---|---|---|
 | [coverage-plugin](coverage-plugin/) | Kotlin | Gradle plugin + JVM agent for bytecode instrumentation |
 | [dashboard](dashboard/) | Rust | REST API, SQLite storage, HTMX frontend, PR comments |
-| [test-rig](test-rig/) | Kotlin | Sample project for testing the plugin |
+| [kmp-test-rig](kmp-test-rig/) | Kotlin | Multi-module KMP sample (Clean Architecture + MVI) |
+| [android-test-rig](android-test-rig/) | Kotlin | Android sample with unit + instrumented tests (Clean Architecture + MVI) |
 
 ## Quick Start
 
@@ -22,7 +23,18 @@ DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
 # Dashboard at http://localhost:3000
 ```
 
+Or create a `.env` file in the dashboard directory:
+
+```env
+DATABASE_URL=sqlite:omnivore.db?mode=rwc
+GITHUB_TOKEN=ghp_your_token_here  # Optional: enables source code viewing
+```
+
+Then just run `cargo run`.
+
 ### 2. Add the Plugin to Your Project
+
+#### KMP / Pure Kotlin
 
 ```kotlin
 // settings.gradle.kts
@@ -33,7 +45,7 @@ pluginManagement {
     }
 }
 
-// build.gradle.kts
+// build.gradle.kts (root project)
 plugins {
     id("io.github.jkjamies.omnivore") version "0.1.0"
 }
@@ -42,6 +54,10 @@ omnivore {
     reports {
         json { enabled.set(true) }
         html { enabled.set(true) }
+        markdown { enabled.set(true) }
+    }
+    dependencies {
+        enabled.set(true)  // Dependency graph in report
     }
     dashboard {
         url.set("http://localhost:3000")
@@ -49,11 +65,104 @@ omnivore {
 }
 ```
 
-### 3. Run Tests and Upload
+For multi-module projects, apply the plugin **only at the root** — it automatically instruments all subproject test tasks and aggregates coverage data.
+
+```kotlin
+// settings.gradle.kts
+include(":core")
+include(":app")
+
+// build.gradle.kts (root)
+plugins {
+    kotlin("jvm") version "2.1.10" apply false
+    id("io.github.jkjamies.omnivore")
+}
+
+subprojects {
+    apply(plugin = "org.jetbrains.kotlin.jvm")
+    // ...
+}
+```
+
+#### Android
+
+```kotlin
+// build.gradle.kts (root project)
+plugins {
+    id("com.android.application") version "8.8.2" apply false
+    kotlin("android") version "2.1.10" apply false
+    id("io.github.jkjamies.omnivore")
+}
+
+omnivore {
+    reports {
+        json { enabled.set(true) }
+        html { enabled.set(true) }
+    }
+    instrumentedTests {
+        enabled.set(true)  // Enable on-device coverage collection
+    }
+    dashboard {
+        url.set("http://localhost:3000")
+    }
+}
+```
+
+Instrumented test coverage requires:
+- An Android emulator or device connected via ADB
+- AGP 8.x+ for build-time bytecode transformation
+- `OmnivoreTestListener` is automatically added to the test runner
+
+#### Compose Filtering
+
+Omnivore auto-detects Compose and filters out compiler-generated classes. To manually control:
+
+```kotlin
+omnivore {
+    composeFilter {
+        enabled.set(true)   // Auto-detected when Compose plugin is applied
+    }
+}
+```
+
+### 3. Run Tests and Generate Report
 
 ```sh
-./gradlew test omnivoreReport omnivoreUpload
+# Single command — triggers tests, generates report
+./gradlew omnivoreReport
+
+# Upload to dashboard
+./gradlew omnivoreUpload
 ```
+
+The `omnivoreReport` task automatically depends on all test tasks, so you don't need to run `test` separately.
+
+**CLI output** shows separate sections for unit and instrumented tests with colored progress bars:
+
+```
+  Omnivore Coverage Report
+
+  ── Unit Tests ──────────────────────────────────────  12 files
+
+  Lines      ████████████████░░░░░░░░   68.6%  151/220
+  Branches   ███████████████░░░░░░░░░   63.7%  79/124
+
+  File                                     Lines   Branches
+  ──────────────────────────────────────  ───────  ────────
+  …/repository/InMemoryUserRepository.kt   63.6%   33.3%   7/11
+  …/presentation/UserListStore.kt          63.3%   53.8%   31/49
+  …/util/Calculator.kt                     86.4%   88.9%   19/22
+  ...
+
+  Dependencies: 2 modules, 1 edges
+  Reports: build/reports/omnivore
+  Formats: json, html, markdown
+```
+
+Reports are generated in `build/reports/omnivore/`:
+- `omnivore-report.json` — machine-readable coverage data
+- `index.html` — visual HTML report
+- `coverage.md` — Markdown summary
 
 ### Non-Gradle Projects
 
@@ -74,24 +183,82 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage" \
   -d @omnivore-report.json
 ```
 
+## Dashboard Setup
+
+### Prerequisites
+
+- Rust toolchain (install via [rustup](https://rustup.rs/))
+- SQLite (bundled via `sqlx`)
+
+### Running Locally
+
+```sh
+cd dashboard
+
+# Option A: Environment variable
+DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
+
+# Option B: .env file (recommended)
+echo 'DATABASE_URL=sqlite:omnivore.db?mode=rwc' > .env
+cargo run
+```
+
+The dashboard starts on `http://localhost:3000`. The SQLite database is created automatically.
+
+### Configuration
+
+| Environment Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | SQLite connection string |
+| `GITHUB_TOKEN` | No | GitHub PAT for source code viewing (fetches on-demand) |
+
+### Source Code Viewing
+
+To see annotated source code in the dashboard:
+
+1. Set `GITHUB_TOKEN` environment variable with a GitHub PAT that has `repo` scope
+2. Configure the project's GitHub repo and source root in the dashboard settings page
+3. Source code is fetched on-demand from GitHub when viewing file coverage — no source is embedded in reports
+
+### Project Settings
+
+After uploading coverage, configure project settings via the dashboard UI or API:
+
+```sh
+# Link to GitHub repo + set source root for path mapping
+curl -X PUT "http://localhost:3000/api/v1/projects/my-project" \
+  -H "Content-Type: application/json" \
+  -d '{"github_repo": "owner/repo", "source_root": "app/src/main/kotlin"}'
+```
+
+The `source_root` maps JVM class paths (e.g., `com/example/MyClass.kt`) to repository paths (e.g., `app/src/main/kotlin/com/example/MyClass.kt`).
+
+### Hosting
+
+The dashboard is a single binary + SQLite file. Deployment options:
+
+- **Local development**: `cargo run` with `.env`
+- **Intranet**: Deploy binary behind a reverse proxy (Nginx, Caddy)
+- **Cloud**: Docker container, Fly.io, Railway, or any VPS
+
 ## Features
 
 - **Compose-aware** — filters out Compose compiler artifacts (ComposableSingletons, LiveLiterals, lambda groups)
+- **Multi-module** — apply once at root, instruments all subprojects automatically
+- **Separate reporting** — unit and instrumented test coverage shown as independent sections with different thresholds
 - **Android instrumented tests** — build-time bytecode transform via AGP, on-device coverage collection
 - **Multi-format ingestion** — omnivore JSON, lcov, llvm-cov export (auto-detected)
 - **Dependency graph** — resolves and visualizes module dependencies (D3.js force-directed graph)
 - **PR comments** — posts coverage summary with delta to GitHub pull requests
 - **Dashboard** — HTMX frontend with coverage trends (Chart.js), file breakdown, dark/light theme
+- **Source code viewing** — on-demand GitHub source fetching with coverage annotations
 
 ## Documentation
 
-- [Gradle Plugin Integration](coverage-plugin/README.md)
-- [Dashboard Setup](dashboard/README.md)
-- [CI/CD Integration (GitHub Actions)](docs/github-actions.md)
-- [lcov Integration (Go, C/C++)](docs/lcov-integration.md)
-- [llvm-cov Integration (Rust, Swift)](docs/llvm-cov-integration.md)
+- [Gradle Plugin Details](coverage-plugin/CLAUDE.md)
+- [Dashboard Architecture](dashboard/CLAUDE.md)
 - [Publishing Setup](coverage-plugin/PUBLISHING-REQUIRED.md)
-- [Future: Multi-Platform Dependency Graphs](FUTURE-DEPENDENCY-GRAPHS.md)
+- [CI/CD Integration (GitHub Actions)](.github/workflows/coverage.yml)
 
 ## License
 

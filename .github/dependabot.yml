@@ -1,0 +1,32 @@
+version: 2
+
+updates:
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Coverage Plugin (Gradle)
+  - package-ecosystem: "gradle"
+    directory: "/coverage-plugin"
+    schedule:
+      interval: "weekly"
+
+  # Dashboard (Cargo/Rust)
+  - package-ecosystem: "cargo"
+    directory: "/dashboard"
+    schedule:
+      interval: "weekly"
+
+  # KMP Test Rig (Gradle)
+  - package-ecosystem: "gradle"
+    directory: "/kmp-test-rig"
+    schedule:
+      interval: "weekly"
+
+  # Android Test Rig (Gradle)
+  - package-ecosystem: "gradle"
+    directory: "/android-test-rig"
+    schedule:
+      interval: "weekly"

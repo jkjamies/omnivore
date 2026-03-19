@@ -12,9 +12,6 @@ import javax.inject.Inject
  * Usage in build.gradle.kts:
  * ```
  * omnivore {
- *     composeFilter {
- *         enabled = true
- *     }
  *     instrumentedTests {
  *         enabled = true
  *     }
@@ -41,7 +38,7 @@ abstract class OmnivoreExtension @Inject constructor(
     val excludes: ListProperty<String> = objects.listProperty(String::class.java)
         .convention(emptyList())
 
-    /** Compose bytecode filter configuration */
+    /** Compose bytecode filter configuration (always enabled; zero-cost on non-Compose projects) */
     val composeFilter: ComposeFilterConfig = objects.newInstance(ComposeFilterConfig::class.java)
 
     /** Instrumented test configuration */
@@ -64,9 +61,6 @@ abstract class OmnivoreExtension @Inject constructor(
 }
 
 abstract class ComposeFilterConfig {
-    /** Enable Compose bytecode filtering. Auto-detected if Compose plugin is applied. */
-    abstract val enabled: Property<Boolean>
-
     /** Additional class patterns to exclude (beyond built-in Compose patterns) */
     abstract val additionalExcludePatterns: ListProperty<String>
 }
