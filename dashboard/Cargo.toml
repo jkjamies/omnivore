@@ -40,7 +40,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 askama = "0.15"
 
 # HTTP client
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "query"] }
 
 # Error handling
 thiserror = "2"

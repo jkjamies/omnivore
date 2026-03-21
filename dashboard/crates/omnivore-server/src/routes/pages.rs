@@ -349,6 +349,48 @@ impl FileCoveragePage {
     }
 }
 
+/// Build candidate GitHub paths for a JVM class file path.
+///
+/// For multi-module Gradle projects, the coverage report stores paths like
+/// `com/example/app/domain/model/Task.kt`. The actual repo path depends on
+/// which module the file lives in. We try common Gradle source layouts:
+/// `{source_root}/{module}/src/main/{java,kotlin}/{file_path}`
+///
+/// We also try the direct path and the source_root as a prefix.
+fn build_source_candidates(source_root: Option<&str>, file_path: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let src_dirs = ["src/main/java", "src/main/kotlin"];
+
+    if let Some(root) = source_root {
+        let root = root.trim_end_matches('/');
+
+        // If source_root already contains src/main/java or similar, use it directly
+        if src_dirs.iter().any(|d| root.contains(d)) {
+            candidates.push(format!("{}/{}", root, file_path));
+        }
+
+        // Try each segment of the file path as a potential module name
+        // e.g., for path "com/example/testrig/domain/model/Task.kt"
+        // try: {root}/domain/src/main/java/com/example/testrig/domain/model/Task.kt
+        let segments: Vec<&str> = file_path.split('/').collect();
+        let mut seen = std::collections::HashSet::new();
+        for seg in &segments {
+            if seen.insert(*seg) {
+                for src_dir in &src_dirs {
+                    candidates.push(format!("{}/{}/{}/{}", root, seg, src_dir, file_path));
+                }
+            }
+        }
+
+        // Also try with just the root as prefix
+        candidates.push(format!("{}/{}", root, file_path));
+    }
+
+    // Fallback: bare file path
+    candidates.push(file_path.to_string());
+    candidates
+}
+
 pub async fn file_coverage_page(
     State(db): State<Database>,
     Path((project_id, file_path)): Path<(String, String)>,
@@ -359,40 +401,61 @@ pub async fn file_coverage_page(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let latest = db
-        .get_latest_snapshot(&project_id)
+    // Search across all target snapshots for the requested file
+    let target_names = db
+        .get_targets_for_project(&project_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let files: Vec<FileCoverage> = latest
-        .files_json
-        .as_ref()
-        .and_then(|json| serde_json::from_str(json).ok())
         .unwrap_or_default();
 
-    let mut file = files
-        .into_iter()
-        .find(|f| f.path == file_path)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let mut file: Option<FileCoverage> = None;
+    let mut matched_snapshot: Option<CoverageSnapshot> = None;
+
+    for tname in &target_names {
+        if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(&project_id, tname).await {
+            let files: Vec<FileCoverage> = snap
+                .files_json
+                .as_ref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+            if let Some(f) = files.into_iter().find(|f| f.path == file_path) {
+                matched_snapshot = Some(snap);
+                file = Some(f);
+                break;
+            }
+        }
+    }
+
+    let mut file = file.ok_or(StatusCode::NOT_FOUND)?;
+    let snapshot = matched_snapshot.unwrap();
 
     // If source not embedded in report, fetch from GitHub
     if file.source_content.is_none() {
         if let Some(repo) = &project.github_repo {
             let token = std::env::var("GITHUB_TOKEN").ok();
-            // Prepend source_root to map JVM class paths to repo paths
-            let repo_path = match &project.source_root {
-                Some(root) => format!("{}/{}", root.trim_end_matches('/'), file_path),
-                None => file_path.clone(),
-            };
-            let content = omnivore_core::github::source::fetch_source(
-                repo,
-                &repo_path,
-                latest.commit_sha.as_deref(),
-                token.as_deref(),
-            )
-            .await;
-            file.source_content = content;
+            let sha = snapshot.commit_sha.as_deref();
+
+            // Build candidate paths to try. For multi-module Gradle/Android projects,
+            // source_root is the project base (e.g., "test-rigs/android-test-rig").
+            // We try: source_root + common Gradle src dirs for each submodule inferred
+            // from the package path, plus the exact configured source_root.
+            let candidates = build_source_candidates(
+                project.source_root.as_deref(),
+                &file_path,
+            );
+
+            for candidate in &candidates {
+                let content = omnivore_core::github::source::fetch_source(
+                    repo,
+                    candidate,
+                    sha,
+                    token.as_deref(),
+                )
+                .await;
+                if content.is_some() {
+                    file.source_content = content;
+                    break;
+                }
+            }
         }
     }
 

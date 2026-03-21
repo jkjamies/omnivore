@@ -33,16 +33,19 @@
                 <span class="target-label">{{ t.label }}</span>
                 <span class="target-rate" style="color:{{ self.rate_color(t.line_rate) }}">{{ self.fmt_pct(t.line_rate) }}%</span>
               </div>
+              <div class="coverage-bar" style="margin-top:2px;margin-bottom:6px;">
+                <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(t.line_rate) }}%;background:{{ self.rate_color(t.line_rate) }};"></div>
+              </div>
               {% endfor %}
             {% else %}
               <div class="project-rate" style="color:{{ self.rate_color(snap.line_rate) }}">
                 {{ self.fmt_pct(snap.line_rate) }}%
               </div>
               <div style="font-size:12px;color:var(--text-muted);">line coverage</div>
+              <div class="coverage-bar" style="margin-top:8px;">
+                <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(snap.line_rate) }}%;background:{{ self.rate_color(snap.line_rate) }};"></div>
+              </div>
             {% endif %}
-            <div class="coverage-bar" style="margin-top:8px;">
-              <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(snap.line_rate) }}%;background:{{ self.rate_color(snap.line_rate) }};"></div>
-            </div>
           {% else %}
             <span class="badge badge-yellow">No data</span>
           {% endif %}
