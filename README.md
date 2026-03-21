@@ -1,6 +1,6 @@
 # Omnivore
 
-Compose-aware code coverage platform for Android, Kotlin, KMP — and any project that produces lcov or llvm-cov output.
+Compose-aware code coverage platform for Android, Kotlin, KMP — and any project that produces llvm-cov, Go coverprofile, Python coverage.py, or lcov output.
 
 Omnivore replaces JaCoCo + SonarQube with a purpose-built coverage pipeline: a Gradle plugin for instrumentation, a Rust dashboard for storage and visualization, and universal ingestion for any language.
 
@@ -10,8 +10,11 @@ Omnivore replaces JaCoCo + SonarQube with a purpose-built coverage pipeline: a G
 |---|---|---|
 | [coverage-plugin](coverage-plugin/) | Kotlin | Gradle plugin + JVM agent for bytecode instrumentation |
 | [dashboard](dashboard/) | Rust | REST API, SQLite storage, HTMX frontend, PR comments |
-| [kmp-test-rig](kmp-test-rig/) | Kotlin | Multi-module KMP sample (Clean Architecture + MVI) |
-| [android-test-rig](android-test-rig/) | Kotlin | Android sample with unit + instrumented tests (Clean Architecture + MVI) |
+| [kmp-test-rig](test-rigs/kmp-test-rig/) | Kotlin | Multi-module KMP sample (Clean Architecture + MVI) |
+| [android-test-rig](test-rigs/android-test-rig/) | Kotlin | Android sample with unit + instrumented tests (Clean Architecture + MVI) |
+| [rust-test-rig](test-rigs/rust-test-rig/) | Rust | Rust workspace (native llvm-cov JSON) |
+| [go-test-rig](test-rigs/go-test-rig/) | Go | Go module (native coverprofile) |
+| [python-test-rig](test-rigs/python-test-rig/) | Python | Python package (native coverage.py JSON) |
 
 ## Quick Start
 
@@ -169,15 +172,26 @@ Reports are generated in `build/reports/omnivore/`:
 Upload coverage from any language via curl:
 
 ```sh
-# lcov (Go, C/C++)
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=lcov&project_id=my-app&project_name=My+App" \
-  -d @coverage.lcov
-
-# llvm-cov (Rust, Swift)
+# Rust / Swift (llvm-cov JSON)
+cargo llvm-cov --json > coverage.json
 curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=llvm-cov&project_id=my-app&project_name=My+App" \
-  -d @llvm-cov-export.json
+  --data-binary @coverage.json
 
-# Omnivore JSON (direct)
+# Go (native coverprofile)
+go test -coverprofile=coverage.out ./...
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=go&project_id=my-app&project_name=My+App" \
+  --data-binary @coverage.out
+
+# Python (coverage.py JSON)
+python3 -m coverage run -m pytest && python3 -m coverage json
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=python&project_id=my-app&project_name=My+App" \
+  --data-binary @coverage.json
+
+# lcov (C/C++, or any tool with lcov output)
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=lcov&project_id=my-app&project_name=My+App" \
+  --data-binary @coverage.lcov
+
+# Omnivore JSON (Kotlin/Android/KMP via plugin)
 curl -X POST "http://localhost:3000/api/v1/ingest/coverage" \
   -H "Content-Type: application/json" \
   -d @omnivore-report.json
@@ -247,7 +261,7 @@ The dashboard is a single binary + SQLite file. Deployment options:
 - **Multi-module** — apply once at root, instruments all subprojects automatically
 - **Separate reporting** — unit and instrumented test coverage shown as independent sections with different thresholds
 - **Android instrumented tests** — build-time bytecode transform via AGP, on-device coverage collection
-- **Multi-format ingestion** — omnivore JSON, lcov, llvm-cov export (auto-detected)
+- **Multi-format ingestion** — omnivore JSON, llvm-cov, Go coverprofile, Python coverage.py, lcov (auto-detected)
 - **Dependency graph** — resolves and visualizes module dependencies (D3.js force-directed graph)
 - **PR comments** — posts coverage summary with delta to GitHub pull requests
 - **Dashboard** — HTMX frontend with coverage trends (Chart.js), file breakdown, dark/light theme

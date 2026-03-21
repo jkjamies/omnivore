@@ -5,6 +5,7 @@ import com.jkjamies.omnivore.agent.runtime.ClassProbeMap
 import com.jkjamies.omnivore.agent.runtime.ExecutionDataStore
 import com.jkjamies.omnivore.agent.runtime.OmnivoreRuntime
 import com.jkjamies.omnivore.agent.runtime.ProbeMap
+import com.jkjamies.omnivore.agent.runtime.ProbeType
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
@@ -88,11 +89,11 @@ class OmnivoreClassTransformer(
         // Skip interfaces — adding static fields with ACC_TRANSIENT to interfaces is illegal
         if ((classNode.access and Opcodes.ACC_INTERFACE) != 0) return null
 
-        // Skip classes already instrumented by AGP build-time transform.
-        // These classes already have $omnivoreProbes and their <clinit> calls
-        // OmnivoreRuntime.getProbes(), which registers the probe array with the
-        // ExecutionDataStore at class load time. No re-instrumentation needed.
-        if (classNode.fields?.any { it.name == ProbeInserter.PROBE_FIELD_NAME } == true) return null
+        // If already instrumented by AGP build-time transform, don't re-instrument
+        // but still build the probe map so the report task can correlate probes to source lines.
+        // The <clinit> already calls OmnivoreRuntime.getProbes() which registers the probe
+        // array with ExecutionDataStore at class load time — execution data is collected automatically.
+        val alreadyInstrumented = classNode.fields?.any { it.name == ProbeInserter.PROBE_FIELD_NAME } == true
 
         // Check class-level Compose patterns with full class info
         if (config.composeFilterEnabled && ComposeDetector.isGeneratedClass(classNode)) {
@@ -103,10 +104,18 @@ class OmnivoreClassTransformer(
         val totalProbeCount = countProbes(classNode)
         if (totalProbeCount == 0) return null
 
-        // Second pass: instrument
+        // Build the probe map (needed for both fresh and already-instrumented classes)
         val classId = classNameToId(className)
         val sourceFile = classNode.sourceFile
         val classProbeMap = probeMap?.getOrCreateClassMap(classId, className, sourceFile)
+        if (classProbeMap != null) {
+            buildProbeMap(classNode, classProbeMap)
+        }
+
+        // If already instrumented, we have the probe map now — don't re-instrument
+        if (alreadyInstrumented) return null
+
+        // Second pass: instrument
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES)
         val instrumenter = InstrumentingClassVisitor(
             classId = classId,
@@ -148,6 +157,48 @@ class OmnivoreClassTransformer(
             }
         }
         return total
+    }
+
+    /**
+     * Build probe map entries by analyzing the class structure (same logic as countProbes
+     * but records each probe's location). Used for already-instrumented classes where
+     * we need the map but don't need to re-instrument.
+     */
+    private fun buildProbeMap(classNode: ClassNode, classProbeMap: ClassProbeMap) {
+        var probeIndex = 0
+        for (method in classNode.methods ?: emptyList()) {
+            val name = method.name ?: continue
+            val access = method.access
+            if (name == "<clinit>") continue
+            if ((access and Opcodes.ACC_BRIDGE) != 0) continue
+            if ((access and Opcodes.ACC_ABSTRACT) != 0) continue
+            if ((access and Opcodes.ACC_NATIVE) != 0) continue
+            if (KotlinDetector.isSyntheticBridgeMethod(method)) continue
+            if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) continue
+
+            var currentLine = -1
+            val seenLines = mutableSetOf<Int>()
+            for (insn in method.instructions ?: continue) {
+                when (insn.type) {
+                    AbstractInsnNode.LINE -> {
+                        val line = (insn as LineNumberNode).line
+                        currentLine = line
+                        if (seenLines.add(line)) {
+                            classProbeMap.addProbe(
+                                probeIndex++, line, name, method.desc ?: "", ProbeType.LINE
+                            )
+                        }
+                    }
+                    AbstractInsnNode.JUMP_INSN -> {
+                        if ((insn as JumpInsnNode).opcode != Opcodes.GOTO) {
+                            classProbeMap.addProbe(
+                                probeIndex++, currentLine, name, method.desc ?: "", ProbeType.BRANCH
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**

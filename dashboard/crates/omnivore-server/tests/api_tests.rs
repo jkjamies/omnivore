@@ -476,7 +476,7 @@ async fn project_detail_page_after_ingest() {
 
 #[tokio::test]
 async fn end_to_end_test_rig_report() {
-    let report = include_str!("../../../../test-rig/build/reports/omnivore/omnivore-report.json");
+    let report = include_str!("../../../../test-rigs/kmp-test-rig/build/reports/omnivore/omnivore-report.json");
 
     let db = test_db().await;
 

@@ -30,6 +30,24 @@ gradlePlugin {
     }
 }
 
+// Generate a version properties file so the plugin knows its own coordinates at runtime.
+// This mirrors JaCoCo's approach where the plugin resolves its agent via Gradle configurations
+// rather than fragile classloader-based JAR scanning.
+val generateVersionProps by tasks.registering {
+    val outputDir = layout.buildDirectory.dir("generated/omnivore-version")
+    val groupId = project.group.toString()
+    val artifactVersion = project.version.toString()
+    outputs.dir(outputDir)
+    doLast {
+        val propsFile = outputDir.get().file("omnivore-version.properties").asFile
+        propsFile.parentFile.mkdirs()
+        propsFile.writeText(
+            "group=$groupId\nartifactId=omnivore-agent\nversion=$artifactVersion\n"
+        )
+    }
+}
+sourceSets.main { resources.srcDir(generateVersionProps) }
+
 kotlin {
     jvmToolchain(17)
 }

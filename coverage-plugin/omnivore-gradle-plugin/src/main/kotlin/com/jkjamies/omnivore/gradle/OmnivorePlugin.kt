@@ -27,14 +27,19 @@ class OmnivorePlugin : Plugin<Project> {
             applyDefaults(project, extension)
         }
 
-        // Configure coverage collection on this project and all subprojects
+        // Configure coverage collection on this project and all subprojects.
+        // The configurators split work between eager (configuration phase) and
+        // deferred (afterEvaluate) to satisfy AGP's requirement that dependencies
+        // are added before configurations are resolved.
         UnitTestConfigurator.configure(project, extension)
         InstrumentedTestConfigurator.configure(project, extension)
 
         project.subprojects { subproject ->
+            // Eager: add runtime dependency & AGP transform during configuration phase
+            InstrumentedTestConfigurator.configure(subproject, extension)
+
             subproject.afterEvaluate {
                 UnitTestConfigurator.configure(subproject, extension)
-                InstrumentedTestConfigurator.configure(subproject, extension)
             }
         }
 
@@ -62,12 +67,19 @@ class OmnivorePlugin : Plugin<Project> {
             }
         }
 
-        // Wire instrumented test pull task dependencies after evaluation
+        // Wire instrumented test task dependencies after evaluation
         project.afterEvaluate {
             reportTask.configure { task ->
-                project.tasks.findByName("omnivorePullCoverage")?.let { task.dependsOn(it) }
-                project.subprojects.forEach { sub ->
-                    sub.tasks.findByName("omnivorePullCoverage")?.let { task.dependsOn(it) }
+                val allProjects = listOf(project) + project.subprojects
+                for (p in allProjects) {
+                    // Depend on connected Android test tasks so omnivoreReport triggers them
+                    p.tasks.names.filter {
+                        it.startsWith("connected") && it.endsWith("AndroidTest")
+                    }.forEach { name ->
+                        task.dependsOn(p.tasks.named(name))
+                    }
+                    // Depend on build-time probe map task (writes .probes from AGP transform)
+                    p.tasks.findByName("omnivoreWriteBuildProbeMap")?.let { task.dependsOn(it) }
                 }
             }
         }

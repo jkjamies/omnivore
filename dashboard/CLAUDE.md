@@ -47,7 +47,7 @@ License: **Apache-2.0**
 | GET | `/api/v1/projects` | List all projects |
 | POST | `/api/v1/projects` | Create project (body: `{id, name, description?, github_repo?}`) |
 | PATCH | `/api/v1/projects/{project_id}` | Update project settings (body: `{github_repo?}`) |
-| POST | `/api/v1/ingest/coverage` | Universal ingest — omnivore JSON, lcov, or llvm-cov (auto-detects or `?format=`) |
+| POST | `/api/v1/ingest/coverage` | Universal ingest — omnivore JSON, lcov, llvm-cov, Go coverprofile, or Python coverage.py (auto-detects or `?format=`) |
 | GET | `/api/v1/coverage/{project_id}/latest` | Latest snapshot for project |
 | GET | `/api/v1/coverage/{project_id}/trend?limit=30` | Coverage trend (TrendPoints) |
 | GET | `/api/v1/coverage/{project_id}/dependencies` | Dependency graph from latest snapshot |
@@ -95,18 +95,22 @@ All parsers normalize to `(OmnivoreReport, CoverageSnapshot)` — a common model
 | Parser | Module | Input Format | Use Case |
 |---|---|---|---|
 | Omnivore JSON | `parsers::omnivore_json` | Omnivore plugin output | Kotlin/Android/KMP projects |
-| lcov | `parsers::lcov` | lcov trace files | Go (`go test -coverprofile`), C/C++ (gcov/lcov) |
+| lcov | `parsers::lcov` | lcov trace files | C/C++ (gcov/lcov) |
 | llvm-cov | `parsers::llvm_cov` | `llvm-cov export --format=json` | Rust (`cargo llvm-cov`), Swift/Xcode |
+| Go coverprofile | `parsers::go_coverprofile` | `go test -coverprofile` output | Go projects (native format, no conversion) |
+| Python coverage.py | `parsers::python_coverage` | `coverage json` output | Python projects (native format, no conversion) |
 
-For lcov and llvm-cov, project metadata (id, name, commit, branch) is supplied via `LcovMeta`/`LlvmCovMeta` structs (mapped from query params in the API).
+For lcov, llvm-cov, Go coverprofile, and Python coverage.py, project metadata (id, name, commit, branch) is supplied via `LcovMeta`/`LlvmCovMeta`/`GoCoverprofileMeta`/`PythonCoverageMeta` structs (mapped from query params in the API).
 
-Format auto-detection: JSON starting with `"format":"omnivore"` → Omnivore; `"type":"llvm.coverage"` → llvm-cov; lines starting with `TN:` or `SF:` → lcov.
+Format auto-detection: JSON starting with `"format":"omnivore"` → Omnivore; `"type":"llvm.coverage"` → llvm-cov; `"executed_lines"` + `"num_statements"` → Python coverage.py; lines starting with `TN:` or `SF:` → lcov; lines starting with `mode:` → Go coverprofile.
 
 ## Architecture
 
 - `omnivore-core::parsers::omnivore_json::parse()` — deserializes report JSON into `OmnivoreReport` + `CoverageSnapshot`
 - `omnivore-core::parsers::lcov::parse()` — parses lcov trace data (DA/BRDA/SF records)
 - `omnivore-core::parsers::llvm_cov::parse()` — parses llvm-cov export JSON (segments → per-line coverage)
+- `omnivore-core::parsers::go_coverprofile::parse()` — parses Go coverprofile (block ranges → per-line coverage)
+- `omnivore-core::parsers::python_coverage::parse()` — parses Python coverage.py JSON (executed/missing lines)
 - `omnivore-core::github::generate_comment()` — generates Markdown PR comment with delta comparison
 - `omnivore-core::github::GitHubClient` — posts/updates PR comments via GitHub REST API
 - `omnivore-core::github::source::fetch_source()` — fetches file source code on-demand from GitHub API (used by file coverage page)

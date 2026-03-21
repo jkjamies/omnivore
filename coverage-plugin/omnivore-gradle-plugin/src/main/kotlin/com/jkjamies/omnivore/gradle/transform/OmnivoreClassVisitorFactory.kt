@@ -24,6 +24,8 @@ import org.objectweb.asm.tree.LineNumberNode
 import com.jkjamies.omnivore.agent.instrumentation.KotlinDetector
 import com.jkjamies.omnivore.agent.instrumentation.ProbeInserter
 import com.jkjamies.omnivore.agent.runtime.ClassProbeMap
+import com.jkjamies.omnivore.agent.runtime.ProbeType
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Parameters for the Omnivore build-time transformation.
@@ -54,6 +56,14 @@ interface OmnivoreTransformParams : InstrumentationParameters {
  */
 abstract class OmnivoreClassVisitorFactory :
     AsmClassVisitorFactory<OmnivoreTransformParams> {
+
+    companion object {
+        /**
+         * Thread-safe accumulator for probe map data collected during build-time transformation.
+         * A Gradle task reads this after the transform completes to write the .probes file.
+         */
+        val buildTimeProbeMap = ProbeMap()
+    }
 
     /**
      * Determine if a class should be instrumented.
@@ -99,6 +109,7 @@ abstract class OmnivoreClassVisitorFactory :
         return OmnivoreInstrumentingVisitor(
             className = className,
             config = config,
+            probeMap = buildTimeProbeMap,
             delegate = nextClassVisitor,
         )
     }
@@ -145,6 +156,7 @@ abstract class OmnivoreClassVisitorFactory :
 private class OmnivoreInstrumentingVisitor(
     private val className: String,
     private val config: AgentConfig,
+    private val probeMap: ProbeMap?,
     delegate: ClassVisitor,
 ) : ClassVisitor(Opcodes.ASM9, delegate) {
 
@@ -153,6 +165,7 @@ private class OmnivoreInstrumentingVisitor(
     private var hasExistingClinit = false
     private var totalProbeCount = 0
     private var isInterface = false
+    private var sourceFile: String? = null
 
     override fun visit(
         version: Int,
@@ -164,6 +177,11 @@ private class OmnivoreInstrumentingVisitor(
     ) {
         isInterface = (access and Opcodes.ACC_INTERFACE) != 0
         super.visit(version, access, name, signature, superName, interfaces)
+    }
+
+    override fun visitSource(source: String?, debug: String?) {
+        sourceFile = source
+        super.visitSource(source, debug)
     }
 
     override fun visitMethod(
@@ -181,10 +199,6 @@ private class OmnivoreInstrumentingVisitor(
             hasExistingClinit = true
             val mv = super.visitMethod(access, name, descriptor, signature, exceptions)
                 ?: return null
-            // We'll prefix probe init — but we don't know totalProbeCount yet.
-            // Use a deferred approach: emit a placeholder that we fix at visitEnd.
-            // Actually, since AGP gives us the class bytes, we can pre-analyze.
-            // For simplicity, wrap in a visitor that prepends init code.
             return DeferredClinitVisitor(classId, className, mv) { totalProbeCount }
         }
 
@@ -197,8 +211,9 @@ private class OmnivoreInstrumentingVisitor(
         if ((access and Opcodes.ACC_NATIVE) != 0) return mv
         if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) return mv
 
+        val classProbeMap = probeMap?.getOrCreateClassMap(classId, className.replace('/', '.'), sourceFile)
         val currentOffset = globalProbeOffset
-        val probeInserter = ProbeInserter(className, currentOffset, name, descriptor, null, mv)
+        val probeInserter = ProbeInserter(className, currentOffset, name, descriptor, classProbeMap, mv)
         return ProbeCountingVisitor(probeInserter) { count ->
             globalProbeOffset += count
             totalProbeCount += count

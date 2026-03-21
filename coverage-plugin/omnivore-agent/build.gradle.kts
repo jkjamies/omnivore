@@ -40,6 +40,22 @@ tasks.jar {
     archiveBaseName.set("omnivore-agent")
 }
 
+// Slim runtime JAR containing only Omnivore classes (no bundled libraries).
+// Used as debugImplementation for Android projects where the app APK needs
+// OmnivoreRuntime on its classpath but can't use the fat JAR (duplicate class conflicts).
+val runtimeJar by tasks.registering(Jar::class) {
+    archiveBaseName.set("omnivore-agent-runtime")
+    archiveClassifier.set("runtime")
+    from(tasks.named("compileKotlin").map { it.outputs })
+    from(tasks.named("processResources").map { it.outputs })
+    // Only include Omnivore's own classes — not ASM, kotlinx-serialization, etc.
+    include("com/jkjamies/omnivore/**")
+}
+
+// Ensure the runtime JAR is built alongside the main JAR
+tasks.named("assemble") { dependsOn(runtimeJar) }
+tasks.named("jar") { finalizedBy(runtimeJar) }
+
 kotlin {
     jvmToolchain(17)
 }

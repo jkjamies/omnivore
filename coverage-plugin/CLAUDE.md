@@ -84,13 +84,16 @@ omnivore {
 **UnitTestConfigurator:** Wires `-javaagent` to all `Test` tasks with config from extension.
 
 **InstrumentedTestConfigurator:** For Android projects with `instrumentedTests.enabled = true`:
-- Adds agent JAR as `androidTestImplementation` dependency
-- Configures test runner arguments for `OmnivoreTestListener`
-- Registers AGP build-time bytecode transform via `OmnivoreClassVisitorFactory`
-- Registers `omnivorePullCoverage` task to `adb pull` data from device after connected tests
+- Adds slim runtime JAR as `implementation` dependency eagerly via `plugins.withId()` (before AGP resolves configurations)
+- 3-tier JAR resolution: included build → Gradle configuration → fat JAR extraction (JaCoCo-inspired)
+- Registers AGP build-time bytecode transform via `OmnivoreClassVisitorFactory` using `plugins.withId()` reactive pattern
+- Configures test runner arguments (`listener`, `omnivore.destdir`, `omnivore.compose`)
+- Registers `omnivoreWriteBuildProbeMap` task — writes probe map accumulated during ASM transform
+- Registers `omnivoreSetupDevice` task — creates writable directory on device before tests
+- Registers `omnivorePullCoverage` task (finalizer) — extracts coverage from logcat (primary), with fallback to adb pull and run-as
 - Coverage data lands in `build/omnivore/connectedAndroidTest/`
 
-**OmnivoreTestListener** (`com.jkjamies.omnivore.agent.android`): JUnit 4 `RunListener` that initializes the agent on `testRunStarted` and flushes `.omnivore`/`.probes` files on `testRunFinished`.
+**OmnivoreTestListener** (`com.jkjamies.omnivore.agent.android`): JUnit 4 `RunListener` that initializes the agent on `testRunStarted` and flushes `.omnivore`/`.probes` files on `testRunFinished`. Outputs coverage data as base64 via System.err (logcat) with marker lines — this bypasses Android SELinux restrictions on `/data/local/tmp/` and survives AGP's post-test app uninstallation.
 
 **OmnivoreClassVisitorFactory** (`com.jkjamies.omnivore.gradle.transform`): AGP `AsmClassVisitorFactory` that applies probe instrumentation at build time (Android has no `-javaagent` support).
 

@@ -5,14 +5,14 @@ use axum::{
 };
 use omnivore_core::github;
 use omnivore_core::model::coverage::{CoverageSnapshot, DependencyGraph};
-use omnivore_core::parsers::{lcov, llvm_cov, omnivore_json, CoverageFormat};
+use omnivore_core::parsers::{go_coverprofile, lcov, llvm_cov, omnivore_json, python_coverage, CoverageFormat};
 use omnivore_core::storage::Database;
 use serde::{Deserialize, Serialize};
 
 /// Query parameters for the universal ingest endpoint.
 #[derive(Deserialize, Default)]
 pub struct IngestParams {
-    /// Explicit format: "omnivore", "lcov", or "llvm-cov". Auto-detected if omitted.
+    /// Explicit format: "omnivore", "lcov", "llvm-cov", "go", or "python". Auto-detected if omitted.
     pub format: Option<String>,
     /// Project ID (required for lcov/llvm-cov, ignored for omnivore).
     pub project_id: Option<String>,
@@ -46,7 +46,7 @@ pub async fn ingest_coverage(
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
     let format = match &params.format {
         Some(f) => CoverageFormat::from_str_loose(f)
-            .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Unknown format: {f}. Use omnivore, lcov, or llvm-cov")))?,
+            .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Unknown format: {f}. Use omnivore, lcov, llvm-cov, go, or python")))?,
         None => CoverageFormat::detect(&body)
             .ok_or_else(|| (StatusCode::BAD_REQUEST, "Could not detect format. Specify ?format= query parameter".into()))?,
     };
@@ -75,6 +75,26 @@ pub async fn ingest_coverage(
             };
             llvm_cov::parse(&body, &meta)
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid llvm-cov export: {e}")))?
+        }
+        CoverageFormat::GoCoverprofile => {
+            let meta = go_coverprofile::GoCoverprofileMeta {
+                project_id: params.project_id.clone(),
+                project_name: params.project_name.clone(),
+                commit_sha: params.commit_sha.clone(),
+                branch: params.branch.clone(),
+            };
+            go_coverprofile::parse(&body, &meta)
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid Go coverprofile: {e}")))?
+        }
+        CoverageFormat::PythonCoverage => {
+            let meta = python_coverage::PythonCoverageMeta {
+                project_id: params.project_id.clone(),
+                project_name: params.project_name.clone(),
+                commit_sha: params.commit_sha.clone(),
+                branch: params.branch.clone(),
+            };
+            python_coverage::parse(&body, &meta)
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid Python coverage.py JSON: {e}")))?
         }
     };
 

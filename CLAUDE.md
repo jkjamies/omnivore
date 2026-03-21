@@ -4,17 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Omnivore — compose-aware code coverage platform replacing JaCoCo + SonarQube for Android, Kotlin, and KMP projects. Also ingests lcov and llvm-cov formats for any language.
+Omnivore — compose-aware code coverage platform replacing JaCoCo + SonarQube for Android, Kotlin, and KMP projects. Also ingests llvm-cov, Go coverprofile, Python coverage.py, and lcov formats for any language.
 
 ## Architecture
 
 ```
-coverage-plugin/     Gradle plugin + JVM agent (Kotlin, multi-module Gradle build)
-dashboard/           REST API + HTMX frontend (Rust workspace, Axum + Askama + SQLite)
-kmp-test-rig/        Multi-module KMP test project (unit tests, dependency graph)
-android-test-rig/    Android test project (unit + instrumented tests)
-schema/              Shared data format definitions (planned)
-.github/workflows/   CI (coverage.yml) and publish (publish.yml) workflows
+coverage-plugin/                 Gradle plugin + JVM agent (Kotlin, multi-module Gradle build)
+dashboard/                       REST API + HTMX frontend (Rust workspace, Axum + Askama + SQLite)
+test-rigs/
+  kmp-test-rig/                  Multi-module KMP test project (unit tests, dependency graph)
+  android-test-rig/              Android test project (unit + instrumented tests)
+  rust-test-rig/                 Rust workspace test project (native llvm-cov JSON → dashboard)
+  go-test-rig/                   Go module test project (native coverprofile → dashboard)
+  python-test-rig/               Python test project (native coverage.py JSON → dashboard)
+schema/                          Shared data format definitions (planned)
+.github/workflows/               CI (coverage.yml) and publish (publish.yml) workflows
 ```
 
 Each sub-project has its own `CLAUDE.md` with detailed architecture, build commands, and conventions. See those for component-specific guidance.
@@ -33,10 +37,19 @@ cd coverage-plugin && ./gradlew build
 cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
 
 # KMP test rig (requires plugin build first — uses composite build)
-cd kmp-test-rig && ./gradlew test omnivoreReport
+cd test-rigs/kmp-test-rig && ./gradlew test omnivoreReport
 
 # Android test rig (requires plugin build first — uses composite build)
-cd android-test-rig && ./gradlew test omnivoreReport
+cd test-rigs/android-test-rig && ./gradlew clean omnivoreReport
+
+# Rust test rig (requires cargo-llvm-cov)
+cd test-rigs/rust-test-rig && cargo llvm-cov --json > coverage.json
+
+# Go test rig
+cd test-rigs/go-test-rig && go test -coverprofile=coverage.out ./...
+
+# Python test rig (requires pytest + coverage)
+cd test-rigs/python-test-rig && python3 -m coverage run -m pytest tests/ && python3 -m coverage json
 ```
 
 ### Run Tests
@@ -70,10 +83,25 @@ cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
 cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
 
 # 2. Build plugin, run tests, generate report, upload (KMP)
-cd kmp-test-rig && ./gradlew test omnivoreReport omnivoreUpload
+cd test-rigs/kmp-test-rig && ./gradlew test omnivoreReport omnivoreUpload
 
 # 3. Or use Android test rig
-cd android-test-rig && ./gradlew test omnivoreReport omnivoreUpload
+cd test-rigs/android-test-rig && ./gradlew test omnivoreReport omnivoreUpload
+
+# 4. Or use Rust test rig (native llvm-cov JSON + curl)
+cd test-rigs/rust-test-rig && cargo llvm-cov --json > coverage.json
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=llvm-cov&project_id=rust-test-rig&project_name=Rust+Test+Rig" \
+  --data-binary @coverage.json
+
+# 5. Or use Go test rig (native coverprofile + curl)
+cd test-rigs/go-test-rig && go test -coverprofile=coverage.out ./...
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=go&project_id=go-test-rig&project_name=Go+Test+Rig" \
+  --data-binary @coverage.out
+
+# 6. Or use Python test rig (native coverage.py JSON + curl)
+cd test-rigs/python-test-rig && python3 -m coverage run -m pytest tests/ && python3 -m coverage json
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=python&project_id=python-test-rig&project_name=Python+Test+Rig" \
+  --data-binary @coverage.json
 ```
 
 ## Conventions

@@ -24,8 +24,23 @@ object OmnivoreTransformConfigurator {
      * dependencies — this keeps the plugin usable in non-Android projects.
      */
     fun configure(project: Project, extension: OmnivoreExtension) {
+        // React to Android plugin application — the transform must be registered during
+        // the configuration phase, before variants are finalized. Using plugins.withId
+        // ensures this works even when called before the subproject's build script runs.
+        val androidPluginIds = listOf(
+            "com.android.application",
+            "com.android.library",
+            "com.android.dynamic-feature"
+        )
+        for (pluginId in androidPluginIds) {
+            project.plugins.withId(pluginId) {
+                registerTransform(project, extension)
+            }
+        }
+    }
+
+    private fun registerTransform(project: Project, extension: OmnivoreExtension) {
         try {
-            // Access AndroidComponentsExtension via reflection
             val componentsExt = project.extensions.findByName("androidComponents") ?: return
 
             val onVariantsMethod = componentsExt.javaClass.getMethod(
@@ -34,15 +49,12 @@ object OmnivoreTransformConfigurator {
                 Class.forName("kotlin.jvm.functions.Function1")
             )
 
-            // Get the selector() method to create a VariantSelector
             val selectorMethod = componentsExt.javaClass.getMethod("selector")
             val selector = selectorMethod.invoke(componentsExt)
 
-            // Select all variants
             val allMethod = selector.javaClass.getMethod("all")
             val allSelector = allMethod.invoke(selector)
 
-            // Register on each variant
             onVariantsMethod.invoke(componentsExt, allSelector, object : kotlin.jvm.functions.Function1<Any, Unit> {
                 override fun invoke(variant: Any) {
                     configureVariant(project, variant, extension)
@@ -50,7 +62,6 @@ object OmnivoreTransformConfigurator {
             })
         } catch (e: Exception) {
             project.logger.info("Omnivore: Could not register AGP bytecode transform: ${e.message}")
-            project.logger.info("Omnivore: Instrumented test coverage will require pre-instrumented classes.")
         }
     }
 
@@ -106,7 +117,7 @@ object OmnivoreTransformConfigurator {
                     project.logger.info("Omnivore: Could not set frames computation mode: ${e.message}")
                 }
 
-                project.logger.lifecycle("Omnivore: Registered build-time bytecode transform for variant")
+                project.logger.info("Omnivore: Registered build-time bytecode transform for variant")
             }
         } catch (e: Exception) {
             project.logger.info("Omnivore: Could not configure variant transform: ${e.message}")

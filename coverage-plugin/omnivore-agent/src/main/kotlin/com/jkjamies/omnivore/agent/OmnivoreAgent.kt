@@ -2,6 +2,7 @@ package com.jkjamies.omnivore.agent
 
 import com.jkjamies.omnivore.agent.instrumentation.OmnivoreClassTransformer
 import com.jkjamies.omnivore.agent.runtime.ExecutionDataStore
+import com.jkjamies.omnivore.agent.runtime.OmnivoreRuntime
 import com.jkjamies.omnivore.agent.runtime.ProbeMap
 import com.jkjamies.omnivore.agent.runtime.ShutdownHook
 import java.lang.instrument.Instrumentation
@@ -44,7 +45,9 @@ object OmnivoreAgent {
     fun initialize(agentConfig: AgentConfig = AgentConfig()) {
         if (initialized) return
         config = agentConfig
-        dataStore = ExecutionDataStore()
+        // Use the runtime's default data store so probes collected before
+        // initialize() (e.g., Android app class <clinit>) are included.
+        dataStore = OmnivoreRuntime.defaultDataStore
         probeMap = ProbeMap()
         ShutdownHook.register(dataStore, probeMap, config)
         initialized = true
