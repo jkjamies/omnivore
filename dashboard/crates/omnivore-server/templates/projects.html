@@ -15,8 +15,8 @@
 </div>
 {% else %}
   {% for item in projects %}
-  <a href="/projects/{{ item.project.id }}" style="text-decoration:none;color:inherit;">
-    <div class="card" style="cursor:pointer;">
+  <a href="/projects/{{ item.project.id }}" class="card-link">
+    <div class="card project-card">
       <div class="project-row">
         <div class="project-info">
           <div class="project-name">{{ item.project.name }}</div>
@@ -27,11 +27,20 @@
         </div>
         <div class="project-coverage">
           {% if let Some(snap) = item.latest %}
-            <div class="project-rate" style="color:{{ self.rate_color(snap.line_rate) }}">
-              {{ self.fmt_pct(snap.line_rate) }}%
-            </div>
-            <div style="font-size:12px;color:var(--text-muted);">line coverage</div>
-            <div class="coverage-bar">
+            {% if item.targets.len() > 1 %}
+              {% for t in item.targets %}
+              <div class="target-indicator">
+                <span class="target-label">{{ t.label }}</span>
+                <span class="target-rate" style="color:{{ self.rate_color(t.line_rate) }}">{{ self.fmt_pct(t.line_rate) }}%</span>
+              </div>
+              {% endfor %}
+            {% else %}
+              <div class="project-rate" style="color:{{ self.rate_color(snap.line_rate) }}">
+                {{ self.fmt_pct(snap.line_rate) }}%
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);">line coverage</div>
+            {% endif %}
+            <div class="coverage-bar" style="margin-top:8px;">
               <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(snap.line_rate) }}%;background:{{ self.rate_color(snap.line_rate) }};"></div>
             </div>
           {% else %}

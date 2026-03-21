@@ -11,6 +11,90 @@ use omnivore_core::storage::Database;
 pub struct ProjectWithLatest {
     pub project: Project,
     pub latest: Option<CoverageSnapshot>,
+    /// Per-target latest snapshots (e.g., JVM_UNIT, ANDROID_INSTRUMENTED)
+    pub targets: Vec<TargetSnapshot>,
+}
+
+/// Summary data for a single coverage target.
+pub struct TargetSnapshot {
+    pub target: String,
+    pub label: String,
+    pub line_rate: f64,
+    pub branch_rate: f64,
+    pub lines_covered: i64,
+    pub lines_total: i64,
+    pub branches_covered: i64,
+    pub branches_total: i64,
+    pub file_count: i64,
+    pub files: Vec<FileCoverage>,
+    pub trend: Vec<TrendEntry>,
+}
+
+impl TargetSnapshot {
+    fn from_snapshot(snap: &CoverageSnapshot, trend: Vec<TrendEntry>) -> Self {
+        let files: Vec<FileCoverage> = snap
+            .files_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+        Self {
+            target: snap.target.clone(),
+            label: target_label(&snap.target),
+            line_rate: snap.line_rate,
+            branch_rate: snap.branch_rate,
+            lines_covered: snap.lines_covered,
+            lines_total: snap.lines_total,
+            branches_covered: snap.branches_covered,
+            branches_total: snap.branches_total,
+            file_count: snap.file_count,
+            files,
+            trend,
+        }
+    }
+}
+
+/// Composite summary computed from multiple targets.
+pub struct CompositeSnapshot {
+    pub line_rate: f64,
+    pub branch_rate: f64,
+    pub lines_covered: i64,
+    pub lines_total: i64,
+    pub branches_covered: i64,
+    pub branches_total: i64,
+    pub file_count: i64,
+}
+
+fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot> {
+    if targets.len() < 2 {
+        return None;
+    }
+    let lines_covered: i64 = targets.iter().map(|t| t.lines_covered).sum();
+    let lines_total: i64 = targets.iter().map(|t| t.lines_total).sum();
+    let branches_covered: i64 = targets.iter().map(|t| t.branches_covered).sum();
+    let branches_total: i64 = targets.iter().map(|t| t.branches_total).sum();
+    let file_count: i64 = targets.iter().map(|t| t.file_count).sum();
+    let line_rate = if lines_total > 0 { lines_covered as f64 / lines_total as f64 } else { 0.0 };
+    let branch_rate = if branches_total > 0 { branches_covered as f64 / branches_total as f64 } else { 0.0 };
+    Some(CompositeSnapshot {
+        line_rate,
+        branch_rate,
+        lines_covered,
+        lines_total,
+        branches_covered,
+        branches_total,
+        file_count,
+    })
+}
+
+fn target_label(target: &str) -> String {
+    match target {
+        "JVM_UNIT" | "JvmUnit" => "Unit Tests".to_string(),
+        "ANDROID_INSTRUMENTED" | "AndroidInstrumented" => "Instrumented Tests".to_string(),
+        "IOS_UNIT" | "IosUnit" => "iOS Unit Tests".to_string(),
+        "KOTLIN_NATIVE" | "KotlinNative" => "Kotlin/Native Tests".to_string(),
+        "COMPOSITE" | "Composite" => "Composite".to_string(),
+        other => other.to_string(),
+    }
 }
 
 // -- Shared helpers --
@@ -51,12 +135,12 @@ impl ProjectsPage {
 pub struct ProjectDetailPage {
     project: Project,
     latest: Option<CoverageSnapshot>,
-    trend: Vec<TrendEntry>,
-    files: Vec<FileCoverage>,
+    targets: Vec<TargetSnapshot>,
+    composite: Option<CompositeSnapshot>,
     has_dependencies: bool,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 pub struct TrendEntry {
     pub line_rate: f64,
     pub branch_rate: f64,
@@ -73,8 +157,18 @@ impl ProjectDetailPage {
     fn short_sha<'a>(&self, sha: &'a str) -> &'a str {
         if sha.len() > 7 { &sha[..7] } else { sha }
     }
-    fn trend_json(&self) -> String {
-        serde_json::to_string(&self.trend).unwrap_or_else(|_| "[]".to_string())
+    fn has_trend(&self) -> bool {
+        self.targets.iter().any(|t| t.trend.len() > 1)
+    }
+    fn all_trends_json(&self) -> String {
+        let datasets: Vec<serde_json::Value> = self.targets.iter().map(|t| {
+            serde_json::json!({
+                "label": t.label,
+                "target": t.target,
+                "data": t.trend,
+            })
+        }).collect();
+        serde_json::to_string(&datasets).unwrap_or_else(|_| "[]".to_string())
     }
 }
 
@@ -94,7 +188,20 @@ pub async fn projects_page(
             .get_latest_snapshot(&project.id)
             .await
             .unwrap_or(None);
-        items.push(ProjectWithLatest { project, latest });
+
+        // Fetch per-target latest for project cards
+        let target_names = db
+            .get_targets_for_project(&project.id)
+            .await
+            .unwrap_or_default();
+        let mut targets = Vec::new();
+        for tname in &target_names {
+            if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(&project.id, tname).await {
+                targets.push(TargetSnapshot::from_snapshot(&snap, vec![]));
+            }
+        }
+
+        items.push(ProjectWithLatest { project, latest, targets });
     }
 
     let page = ProjectsPage { projects: items };
@@ -117,26 +224,33 @@ pub async fn project_detail_page(
         .await
         .unwrap_or(None);
 
-    let snapshots = db
-        .get_snapshots_for_project(&project_id, 30)
+    // Fetch per-target data
+    let target_names = db
+        .get_targets_for_project(&project_id)
         .await
         .unwrap_or_default();
 
-    let mut trend: Vec<TrendEntry> = snapshots
-        .iter()
-        .map(|s| TrendEntry {
-            line_rate: s.line_rate,
-            branch_rate: s.branch_rate,
-            created_at: s.created_at.to_rfc3339(),
-        })
-        .collect();
-    trend.reverse();
+    let mut targets = Vec::new();
+    for tname in &target_names {
+        if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(&project_id, tname).await {
+            let snaps = db
+                .get_snapshots_for_project_by_target(&project_id, tname, 30)
+                .await
+                .unwrap_or_default();
+            let mut trend: Vec<TrendEntry> = snaps
+                .iter()
+                .map(|s| TrendEntry {
+                    line_rate: s.line_rate,
+                    branch_rate: s.branch_rate,
+                    created_at: s.created_at.to_rfc3339(),
+                })
+                .collect();
+            trend.reverse();
+            targets.push(TargetSnapshot::from_snapshot(&snap, trend));
+        }
+    }
 
-    let files: Vec<FileCoverage> = latest
-        .as_ref()
-        .and_then(|s| s.files_json.as_ref())
-        .and_then(|json| serde_json::from_str(json).ok())
-        .unwrap_or_default();
+    let composite = compute_composite(&targets);
 
     let has_dependencies = latest
         .as_ref()
@@ -146,8 +260,8 @@ pub async fn project_detail_page(
     let page = ProjectDetailPage {
         project,
         latest,
-        trend,
-        files,
+        targets,
+        composite,
         has_dependencies,
     };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

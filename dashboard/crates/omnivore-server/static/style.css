@@ -239,6 +239,86 @@ tr:hover td { background: var(--bg-hover); }
 }
 .btn:hover { background: var(--accent-hover); }
 
+/* Card link */
+.card-link { text-decoration: none; color: inherit; display: block; }
+.card-link:hover { text-decoration: none; }
+.card-link:hover .card { border-color: var(--accent); box-shadow: var(--shadow-lg); }
+
+/* Project card hover */
+.project-card { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+
+/* Target indicators on project cards */
+.target-indicator {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+.target-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.target-rate {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+/* Target card */
+.target-card { transition: border-color 0.15s; }
+.target-card:hover { border-color: var(--accent); }
+
+/* Composite card */
+.composite-card {
+  border-left: 4px solid var(--accent);
+}
+.composite-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+.composite-stat {
+  padding: 8px 0;
+}
+.stat-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+/* Badge variants */
+.badge-accent {
+  background: rgba(67,97,238,0.12);
+  color: var(--accent);
+}
+.badge-target {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* File breakdown collapsible */
+.file-breakdown {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.file-breakdown summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 4px 0;
+  user-select: none;
+}
+.file-breakdown summary:hover { color: var(--accent); }
+.file-breakdown[open] summary { margin-bottom: 12px; }
+
 /* Source code coverage view */
 .source-view {
   overflow-x: auto;

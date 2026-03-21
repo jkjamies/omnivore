@@ -301,6 +301,78 @@ impl Database {
         .await
     }
 
+    /// Get the latest snapshot for a specific target.
+    pub async fn get_latest_snapshot_by_target(
+        &self,
+        project_id: &str,
+        target: &str,
+    ) -> Result<Option<CoverageSnapshot>, sqlx::Error> {
+        sqlx::query_as!(
+            CoverageSnapshot,
+            r#"SELECT id as "id!: String", project_id,
+                      commit_sha as "commit_sha: String",
+                      branch as "branch: String",
+                      target, line_rate, branch_rate,
+                      lines_covered, lines_total,
+                      branches_covered, branches_total, file_count,
+                      created_at as "created_at!: DateTime<Utc>",
+                      files_json as "files_json: String",
+                      dependencies_json as "dependencies_json: String"
+               FROM coverage_snapshots
+               WHERE project_id = ? AND target = ?
+               ORDER BY created_at DESC
+               LIMIT 1"#,
+            project_id,
+            target
+        )
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Get trend data for a specific target.
+    pub async fn get_snapshots_for_project_by_target(
+        &self,
+        project_id: &str,
+        target: &str,
+        limit: i64,
+    ) -> Result<Vec<CoverageSnapshot>, sqlx::Error> {
+        sqlx::query_as!(
+            CoverageSnapshot,
+            r#"SELECT id as "id!: String", project_id,
+                      commit_sha as "commit_sha: String",
+                      branch as "branch: String",
+                      target, line_rate, branch_rate,
+                      lines_covered, lines_total,
+                      branches_covered, branches_total, file_count,
+                      created_at as "created_at!: DateTime<Utc>",
+                      files_json as "files_json: String",
+                      dependencies_json as "dependencies_json: String"
+               FROM coverage_snapshots
+               WHERE project_id = ? AND target = ?
+               ORDER BY created_at DESC
+               LIMIT ?"#,
+            project_id,
+            target,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Get distinct targets that have snapshots for a project.
+    pub async fn get_targets_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        let rows = sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT target FROM coverage_snapshots WHERE project_id = ? ORDER BY target",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Auto-create project if it doesn't exist, then insert the snapshot.
     pub async fn ingest_snapshot(
         &self,

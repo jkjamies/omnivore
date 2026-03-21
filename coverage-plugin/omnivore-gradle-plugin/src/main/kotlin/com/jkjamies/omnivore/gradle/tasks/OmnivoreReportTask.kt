@@ -159,31 +159,31 @@ abstract class OmnivoreReportTask : DefaultTask() {
             resolvedDependencyGraph
         }
 
-        // For report files, use the primary target (or first one)
-        val primaryTarget = targets.first()
-        // For JSON, merge all data for backwards compatibility
+        // Generate reports
+        val reportFormats = mutableListOf<String>()
+        if (jsonEnabled.get()) {
+            // Write one JSON file per target for separate dashboard uploads
+            for (tc in targets) {
+                val suffix = tc.target.name.lowercase().replace("_", "-")
+                val jsonFile = File(outputDir, "omnivore-report-$suffix.json")
+                JsonReportWriter.write(
+                    outputFile = jsonFile,
+                    analysisResult = tc.result,
+                    projectId = projectId.get(),
+                    projectName = projectName.get(),
+                    target = tc.target,
+                    dependencyGraph = depGraph,
+                )
+            }
+            reportFormats.add("json")
+        }
+
+        // For local HTML/markdown, merge all data for a combined view
         val mergedResult = if (targets.size > 1) {
             val (store, probeMap) = mergeData(allExecFiles, allProbeFiles)
             CoverageAnalyzer.analyze(store, probeMap)
         } else {
-            primaryTarget.result
-        }
-
-        val reportTarget = if (targets.size > 1) CoverageTarget.COMPOSITE else primaryTarget.target
-
-        // Generate reports
-        val reportFormats = mutableListOf<String>()
-        if (jsonEnabled.get()) {
-            val jsonFile = File(outputDir, "omnivore-report.json")
-            JsonReportWriter.write(
-                outputFile = jsonFile,
-                analysisResult = mergedResult,
-                projectId = projectId.get(),
-                projectName = projectName.get(),
-                target = reportTarget,
-                dependencyGraph = depGraph,
-            )
-            reportFormats.add("json")
+            targets.first().result
         }
         if (htmlEnabled.get()) {
             val htmlFile = File(outputDir, "index.html")
