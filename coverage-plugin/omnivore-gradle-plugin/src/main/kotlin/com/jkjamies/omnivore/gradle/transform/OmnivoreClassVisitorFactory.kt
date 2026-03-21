@@ -211,7 +211,7 @@ private class OmnivoreInstrumentingVisitor(
         if ((access and Opcodes.ACC_NATIVE) != 0) return mv
         if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) return mv
 
-        val classProbeMap = probeMap?.getOrCreateClassMap(classId, className.replace('/', '.'), sourceFile)
+        val classProbeMap = probeMap?.getOrCreateClassMap(classId, className, sourceFile)
         val currentOffset = globalProbeOffset
         val probeInserter = ProbeInserter(className, currentOffset, name, descriptor, classProbeMap, mv)
         return ProbeCountingVisitor(probeInserter) { count ->

@@ -82,7 +82,11 @@ object DependencyGraphResolver {
 
             for (config in scanProject.configurations) {
                 val configName = config.name
-                if (configName !in targetConfigs) continue
+                // Match exact names (JVM) or variant-prefixed names (Android: debugRuntimeClasspath, etc.)
+                val isTarget = configName in targetConfigs || targetConfigs.any { base ->
+                    configName.endsWith(base.replaceFirstChar { it.uppercaseChar() })
+                }
+                if (!isTarget) continue
                 if (!config.isCanBeResolved) continue
 
                 val resolved = try {
@@ -114,9 +118,19 @@ object DependencyGraphResolver {
             }
         }
 
+        // Deduplicate edges: keep one edge per (from, to) pair, preferring
+        // "implementation" > "test" > "transitive" labels. Remove self-edges.
+        val configPriority = mapOf("implementation" to 0, "api" to 0, "test" to 1, "transitive" to 2)
+        val deduped = edges
+            .filter { it.from != it.to }
+            .groupBy { it.from to it.to }
+            .map { (_, group) ->
+                group.minByOrNull { configPriority[it.configuration] ?: 99 } ?: group.first()
+            }
+
         return DependencyGraph(
             modules = nodes.values.toList(),
-            edges = edges.toList(),
+            edges = deduped,
         )
     }
 
@@ -171,6 +185,14 @@ object DependencyGraphResolver {
         }
     }
 
-    private fun simplifyConfigName(name: String): String =
-        CONFIG_LABELS[name] ?: "implementation"
+    private fun simplifyConfigName(name: String): String {
+        CONFIG_LABELS[name]?.let { return it }
+        // Handle variant-prefixed names like debugRuntimeClasspath → implementation
+        for ((base, label) in CONFIG_LABELS) {
+            if (name.endsWith(base.replaceFirstChar { it.uppercaseChar() })) {
+                return label
+            }
+        }
+        return "implementation"
+    }
 }
