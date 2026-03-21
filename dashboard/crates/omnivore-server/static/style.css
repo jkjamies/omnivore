@@ -427,6 +427,23 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   opacity: 0.5;
 }
 
+/* Source loading placeholder shimmer */
+.source-placeholder {
+  height: 14px;
+  background: linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 3px;
+  width: 60%;
+  min-width: 80px;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+/* Hide shimmer once HTMX swaps in real content */
+.htmx-settling .source-placeholder { display: none; }
+
 /* Source legend */
 .source-legend {
   display: flex;

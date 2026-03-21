@@ -25,6 +25,10 @@ pub fn build_router(db: Database) -> Router {
             "/projects/{project_id}/files/{*file_path}",
             routing::get(routes::pages::file_coverage_page),
         )
+        .route(
+            "/api/v1/source/{project_id}/files/{*file_path}",
+            routing::get(routes::pages::file_source_fragment),
+        )
         // API: Health
         .route("/api/v1/health", routing::get(routes::health::health))
         // API: Projects
