@@ -64,6 +64,19 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS source_cache (
+                repo TEXT NOT NULL,
+                path TEXT NOT NULL,
+                commit_ref TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (repo, path, commit_ref)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
         // Migration: add dependencies_json column if it doesn't exist
         // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check the schema.
         let has_deps_col: bool = sqlx::query_scalar::<_, i32>(
@@ -371,6 +384,50 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    // -- Source cache --
+
+    /// Look up cached source content.
+    pub async fn get_cached_source(
+        &self,
+        repo: &str,
+        path: &str,
+        commit_ref: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let ref_key = if commit_ref.is_empty() { "" } else { commit_ref };
+        sqlx::query_scalar::<_, String>(
+            "SELECT content FROM source_cache WHERE repo = ? AND path = ? AND commit_ref = ?",
+        )
+        .bind(repo)
+        .bind(path)
+        .bind(ref_key)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Store source content in cache.
+    pub async fn cache_source(
+        &self,
+        repo: &str,
+        path: &str,
+        commit_ref: &str,
+        content: &str,
+    ) -> Result<(), sqlx::Error> {
+        let ref_key = if commit_ref.is_empty() { "" } else { commit_ref };
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT OR REPLACE INTO source_cache (repo, path, commit_ref, content, fetched_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(repo)
+        .bind(path)
+        .bind(ref_key)
+        .bind(content)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Auto-create project if it doesn't exist, then insert the snapshot.

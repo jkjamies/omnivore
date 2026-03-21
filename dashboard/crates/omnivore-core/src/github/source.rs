@@ -1,9 +1,11 @@
 use reqwest::Client;
 
-/// Fetch a file's content from GitHub at a specific commit.
+/// Fetch a file's content from GitHub using raw.githubusercontent.com.
 ///
-/// Uses the GitHub REST API: `GET /repos/{owner}/{repo}/contents/{path}?ref={sha}`
-/// Returns the decoded file content, or None if not found / error.
+/// This is faster than the Contents API — no JSON encoding/decoding overhead.
+/// URL format: `https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}`
+///
+/// Falls back to HEAD of the default branch if no commit SHA is provided.
 pub async fn fetch_source(
     github_repo: &str,
     file_path: &str,
@@ -11,19 +13,15 @@ pub async fn fetch_source(
     github_token: Option<&str>,
 ) -> Option<String> {
     let client = Client::new();
+    let git_ref = commit_sha.unwrap_or("HEAD");
     let url = format!(
-        "https://api.github.com/repos/{}/contents/{}",
-        github_repo, file_path
+        "https://raw.githubusercontent.com/{}/{}/{}",
+        github_repo, git_ref, file_path
     );
 
     let mut req = client
         .get(&url)
-        .header("Accept", "application/vnd.github.v3.raw")
         .header("User-Agent", "omnivore-dashboard");
-
-    if let Some(sha) = commit_sha {
-        req = req.query(&[("ref", sha)]);
-    }
 
     if let Some(token) = github_token {
         req = req.header("Authorization", format!("Bearer {}", token));

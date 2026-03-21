@@ -99,6 +99,13 @@ fn target_label(target: &str) -> String {
 
 // -- Shared helpers --
 
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 fn fmt_pct_val(rate: f64) -> String {
     format!("{:.1}", rate * 100.0)
 }
@@ -306,9 +313,6 @@ impl FileCoveragePage {
     fn total_count(&self) -> usize {
         self.file.lines.len()
     }
-    fn has_source(&self) -> bool {
-        self.file.source_content.is_some()
-    }
     fn line_rows(&self) -> Vec<LineRow> {
         let mut hit_map = std::collections::HashMap::new();
         for line in &self.file.lines {
@@ -391,6 +395,8 @@ fn build_source_candidates(source_root: Option<&str>, file_path: &str) -> Vec<St
     candidates
 }
 
+/// Renders the file coverage page immediately with coverage data only.
+/// Source code is loaded asynchronously via HTMX from the source endpoint.
 pub async fn file_coverage_page(
     State(db): State<Database>,
     Path((project_id, file_path)): Path<(String, String)>,
@@ -401,43 +407,35 @@ pub async fn file_coverage_page(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Search across all target snapshots for the requested file
-    let target_names = db
-        .get_targets_for_project(&project_id)
+    let file = find_file_across_targets(&db, &project_id, &file_path).await?;
+
+    let page = FileCoveragePage { project, file_path, file };
+    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Html(html))
+}
+
+/// HTMX endpoint: fetches source code (from DB cache or GitHub) and returns
+/// an HTML fragment with the source table rows including code content.
+pub async fn file_source_fragment(
+    State(db): State<Database>,
+    Path((project_id, file_path)): Path<(String, String)>,
+) -> Result<Html<String>, StatusCode> {
+    let project = db
+        .get_project(&project_id)
         .await
-        .unwrap_or_default();
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
-    let mut file: Option<FileCoverage> = None;
-    let mut matched_snapshot: Option<CoverageSnapshot> = None;
+    let mut file = find_file_across_targets(&db, &project_id, &file_path).await?;
 
-    for tname in &target_names {
-        if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(&project_id, tname).await {
-            let files: Vec<FileCoverage> = snap
-                .files_json
-                .as_ref()
-                .and_then(|json| serde_json::from_str(json).ok())
-                .unwrap_or_default();
-            if let Some(f) = files.into_iter().find(|f| f.path == file_path) {
-                matched_snapshot = Some(snap);
-                file = Some(f);
-                break;
-            }
-        }
-    }
-
-    let mut file = file.ok_or(StatusCode::NOT_FOUND)?;
-    let snapshot = matched_snapshot.unwrap();
-
-    // If source not embedded in report, fetch from GitHub
-    if file.source_content.is_none() {
-        if let Some(repo) = &project.github_repo {
+    // Try DB cache first
+    if let Some(repo) = &project.github_repo {
+        let commit_ref = ""; // TODO: could use snapshot commit_sha
+        if let Ok(Some(cached)) = db.get_cached_source(repo, &file_path, commit_ref).await {
+            file.source_content = Some(cached);
+        } else {
+            // Fetch from GitHub (raw URL) and cache
             let token = std::env::var("GITHUB_TOKEN").ok();
-            let sha = snapshot.commit_sha.as_deref();
-
-            // Build candidate paths to try. For multi-module Gradle/Android projects,
-            // source_root is the project base (e.g., "test-rigs/android-test-rig").
-            // We try: source_root + common Gradle src dirs for each submodule inferred
-            // from the package path, plus the exact configured source_root.
             let candidates = build_source_candidates(
                 project.source_root.as_deref(),
                 &file_path,
@@ -447,21 +445,74 @@ pub async fn file_coverage_page(
                 let content = omnivore_core::github::source::fetch_source(
                     repo,
                     candidate,
-                    sha,
+                    None,
                     token.as_deref(),
                 )
                 .await;
-                if content.is_some() {
-                    file.source_content = content;
+                if let Some(src) = content {
+                    // Cache it
+                    let _ = db.cache_source(repo, &file_path, commit_ref, &src).await;
+                    file.source_content = Some(src);
                     break;
                 }
             }
         }
     }
 
-    let page = FileCoveragePage { project, file_path, file };
-    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Render just the table rows as an HTML fragment
+    let page = FileCoveragePage {
+        project,
+        file_path,
+        file,
+    };
+    let rows = page.line_rows();
+    let mut html = String::new();
+    for line in &rows {
+        html.push_str(&format!(
+            r#"<tr class="{}"><td class="line-gutter">{}</td><td class="line-num">{}</td><td class="line-hits">{}</td><td class="line-code"><pre>{}</pre></td></tr>"#,
+            line.css_class,
+            match line.status {
+                LineStatus::Covered => r#"<span class="gutter-mark gutter-covered"></span>"#,
+                LineStatus::Uncovered => r#"<span class="gutter-mark gutter-uncovered"></span>"#,
+                LineStatus::None => "",
+            },
+            line.number,
+            match line.status {
+                LineStatus::Covered => format!(r#"<span class="hit-badge hit-covered">{}x</span>"#, line.hits),
+                LineStatus::Uncovered => r#"<span class="hit-badge hit-uncovered">0x</span>"#.to_string(),
+                LineStatus::None => String::new(),
+            },
+            html_escape(&line.code),
+        ));
+    }
     Ok(Html(html))
+}
+
+/// Find a file's coverage data across all target snapshots for a project.
+async fn find_file_across_targets(
+    db: &Database,
+    project_id: &str,
+    file_path: &str,
+) -> Result<FileCoverage, StatusCode> {
+    let target_names = db
+        .get_targets_for_project(project_id)
+        .await
+        .unwrap_or_default();
+
+    for tname in &target_names {
+        if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(project_id, tname).await {
+            let files: Vec<FileCoverage> = snap
+                .files_json
+                .as_ref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+            if let Some(f) = files.into_iter().find(|f| f.path == file_path) {
+                return Ok(f);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
 }
 
 // -- Dependency Graph Page --
