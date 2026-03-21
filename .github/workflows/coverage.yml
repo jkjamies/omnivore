@@ -47,7 +47,7 @@ jobs:
 
       - name: Upload coverage report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: omnivore-coverage-report
           path: test-rigs/kmp-test-rig/build/reports/omnivore/
