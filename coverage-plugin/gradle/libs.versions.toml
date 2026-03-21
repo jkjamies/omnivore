@@ -1,7 +1,7 @@
 [versions]
 kotlin = "2.1.10"
 asm = "9.7.1"
-kotlinx-serialization = "1.8.0"
+kotlinx-serialization = "1.10.0"
 junit5 = "5.11.4"
 agp = "8.8.2"
 
