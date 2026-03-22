@@ -12,7 +12,7 @@
 </div>
 
 <div class="page-header">
-  <h1>{{ project.name }}<button type="button" class="settings-gear" onclick="document.getElementById('thresholdModal').style.display='flex'" title="Project settings">&#9881;</button></h1>
+  <h1>{{ project.name }}<a href="/projects/{{ project.id }}/settings" class="settings-gear" title="Project settings">&#9881;</a></h1>
   {% if let Some(snap) = latest %}
   <div class="meta">
     {% if let Some(sha) = snap.commit_sha %}
@@ -93,7 +93,7 @@
       <div style="margin-top:8px;">
         {% if t.line_rate >= line_threshold %}
         <span class="badge badge-green">Passing</span>
-        {% else if t.line_rate >= line_threshold * 0.625 %}
+        {% else if t.line_rate >= line_warn_threshold %}
         <span class="badge badge-yellow">Warning</span>
         {% else %}
         <span class="badge badge-red">Failing</span>
@@ -218,72 +218,6 @@
   </div>
 </div>
 {% endif %}
-
-{# -- Threshold settings modal -- #}
-<div id="thresholdModal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
-  <div class="modal">
-    <div class="modal-header">
-      <h2>Coverage Thresholds</h2>
-      <button type="button" class="modal-close" onclick="document.getElementById('thresholdModal').style.display='none'">&times;</button>
-    </div>
-    <p class="settings-hint">Override global defaults for this project. Leave empty to inherit.</p>
-    <form class="settings-form" method="post" action="/projects/{{ project.id }}/thresholds">
-      <div class="settings-field">
-        <label>Line coverage</label>
-        <div class="settings-threshold-row">
-          <div class="settings-threshold-pair">
-            <span class="threshold-label threshold-warn">Warning</span>
-            <div class="settings-input-group">
-              <input type="number" id="line_warn_threshold" name="line_warn_threshold"
-                     value="{{ self.project_line_warn_pct() }}"
-                     placeholder="{{ self.global_line_warn_pct() }}"
-                     min="0" max="100" step="1">
-              <span class="settings-unit">%</span>
-            </div>
-          </div>
-          <div class="settings-threshold-pair">
-            <span class="threshold-label threshold-good">Good</span>
-            <div class="settings-input-group">
-              <input type="number" id="line_threshold" name="line_threshold"
-                     value="{{ self.project_line_pct() }}"
-                     placeholder="{{ self.global_line_pct() }}"
-                     min="0" max="100" step="1">
-              <span class="settings-unit">%</span>
-            </div>
-          </div>
-        </div>
-        <div class="settings-field-hint">Global defaults: {{ self.global_line_warn_pct() }}% / {{ self.global_line_pct() }}%</div>
-      </div>
-      <div class="settings-field">
-        <label>Branch coverage</label>
-        <div class="settings-threshold-row">
-          <div class="settings-threshold-pair">
-            <span class="threshold-label threshold-warn">Warning</span>
-            <div class="settings-input-group">
-              <input type="number" id="branch_warn_threshold" name="branch_warn_threshold"
-                     value="{{ self.project_branch_warn_pct() }}"
-                     placeholder="{{ self.global_branch_warn_pct() }}"
-                     min="0" max="100" step="1">
-              <span class="settings-unit">%</span>
-            </div>
-          </div>
-          <div class="settings-threshold-pair">
-            <span class="threshold-label threshold-good">Good</span>
-            <div class="settings-input-group">
-              <input type="number" id="branch_threshold" name="branch_threshold"
-                     value="{{ self.project_branch_pct() }}"
-                     placeholder="{{ self.global_branch_pct() }}"
-                     min="0" max="100" step="1">
-              <span class="settings-unit">%</span>
-            </div>
-          </div>
-        </div>
-        <div class="settings-field-hint">Global defaults: {{ self.global_branch_warn_pct() }}% / {{ self.global_branch_pct() }}%</div>
-      </div>
-      <button type="submit" class="btn" style="margin-top:8px;">Save</button>
-    </form>
-  </div>
-</div>
 
 {# -- Trend chart (all targets overlaid) -- #}
 {% if self.has_trend() %}

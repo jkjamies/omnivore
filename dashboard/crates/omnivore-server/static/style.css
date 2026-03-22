@@ -788,6 +788,128 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   color: var(--text-muted);
 }
 
+/* Modal sections */
+.modal-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: var(--text);
+}
+.modal-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 20px 0 16px;
+}
+
+/* Badge snippets */
+.badge-preview {
+  margin-bottom: 16px;
+}
+.badge-snippets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.badge-snippet label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 2px;
+}
+.badge-code-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.badge-code {
+  flex: 1;
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: nowrap;
+  display: block;
+}
+.btn-copy {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 14px;
+  transition: background 0.1s, color 0.1s;
+}
+.btn-copy:hover {
+  background: var(--bg-hover, rgba(128,128,128,0.1));
+  color: var(--text);
+}
+
+/* Danger zone */
+.card-danger {
+  border-color: var(--red);
+}
+.card-danger .card-header h2 {
+  color: var(--red);
+}
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.btn-danger:hover {
+  opacity: 0.9;
+}
+
+
+/* Section titles */
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0 0 12px 0;
+}
+
+/* Home summary bar */
+.summary-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.summary-stat {
+  flex: 1;
+  padding: 20px;
+  text-align: center;
+}
+.summary-stat + .summary-stat {
+  border-left: 1px solid var(--border);
+}
+.summary-stat-wide {
+  flex: 1.5;
+}
+.summary-stat .stat-value {
+  font-size: 28px;
+}
+.summary-stat .stat-label {
+  margin-bottom: 0;
+}
+
 /* Project settings gear */
 .settings-gear {
   background: none;

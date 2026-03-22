@@ -16,10 +16,19 @@ pub struct ProjectWithLatest {
     pub effective_line_warn_threshold: f64,
 }
 
+pub struct HomeSummary {
+    pub total_projects: usize,
+    pub avg_line_rate: f64,
+    pub passing_count: usize,
+    pub warning_count: usize,
+    pub failing_count: usize,
+}
+
 #[derive(Template)]
 #[template(path = "projects.html")]
 struct ProjectsPage {
     projects: Vec<ProjectWithLatest>,
+    summary: Option<HomeSummary>,
 }
 
 impl ProjectsPage {
@@ -76,7 +85,46 @@ pub async fn projects_page(
         items.push(ProjectWithLatest { project, latest, targets, effective_line_threshold, effective_line_warn_threshold });
     }
 
-    let page = ProjectsPage { projects: items };
+    let summary = if items.is_empty() {
+        None
+    } else {
+        let total_projects = items.len();
+        let mut total_lines_covered: i64 = 0;
+        let mut total_lines: i64 = 0;
+        let mut passing = 0usize;
+        let mut warning = 0usize;
+        let mut failing = 0usize;
+
+        for item in &items {
+            if let Some(snap) = &item.latest {
+                total_lines_covered += snap.lines_covered;
+                total_lines += snap.lines_total;
+                if snap.line_rate >= item.effective_line_threshold {
+                    passing += 1;
+                } else if snap.line_rate >= item.effective_line_warn_threshold {
+                    warning += 1;
+                } else {
+                    failing += 1;
+                }
+            }
+        }
+
+        let avg_line_rate = if total_lines > 0 {
+            total_lines_covered as f64 / total_lines as f64
+        } else {
+            0.0
+        };
+
+        Some(HomeSummary {
+            total_projects,
+            avg_line_rate,
+            passing_count: passing,
+            warning_count: warning,
+            failing_count: failing,
+        })
+    };
+
+    let page = ProjectsPage { projects: items, summary };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))
 }
