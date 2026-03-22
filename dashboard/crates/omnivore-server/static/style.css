@@ -477,7 +477,7 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
 .file-tree-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 13px;
   table-layout: fixed;
 }
 .file-tree-table th {
@@ -518,6 +518,105 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 400;
+}
+
+/* Delta indicators */
+.delta {
+  font-size: 10px;
+  font-weight: 500;
+  margin-left: 4px;
+  opacity: 0.7;
+}
+.delta-up { color: var(--green); }
+.delta-down { color: var(--red); }
+
+/* File search */
+.file-search-wrap {
+  margin-bottom: 12px;
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  max-width: 360px;
+}
+.file-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.file-search-clear:hover {
+  color: var(--text);
+}
+.file-search {
+  width: 100%;
+  padding: 8px 28px 8px 12px;
+  font-size: 14px;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.file-search:focus {
+  border-color: var(--accent);
+}
+.file-search::placeholder {
+  color: var(--text-muted);
+}
+
+/* Hotspot table */
+.hotspot-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.hotspot-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 10px 12px;
+  border-bottom: 2px solid var(--border);
+}
+.hotspot-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.hotspot-table tr:hover > td {
+  background: var(--bg-hover);
+}
+.hotspot-uncovered {
+  font-weight: 700;
+  color: var(--red);
+}
+.hotspot-total {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Sortable column headers */
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+}
+.sortable-th:hover {
+  color: var(--accent);
+}
+.sort-indicator {
+  font-size: 10px;
+  color: var(--text-muted);
 }
 
 @media (max-width: 768px) {

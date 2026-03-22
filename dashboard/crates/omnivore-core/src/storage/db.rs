@@ -450,6 +450,66 @@ impl Database {
             self.create_project(&input).await?;
         }
 
-        self.insert_snapshot(snapshot).await
+        self.insert_snapshot(snapshot).await?;
+
+        // Prune old snapshots for this project+target
+        let target = &snapshot.target;
+        self.prune_snapshots(&snapshot.project_id, target).await?;
+
+        Ok(())
+    }
+
+    /// Prune old snapshots based on retention limits.
+    /// - Keep the newest `retention_full` snapshots with full file data.
+    /// - Keep the next `retention_summary` snapshots as summary-only (files_json = NULL).
+    /// - Delete everything older.
+    pub async fn prune_snapshots(
+        &self,
+        project_id: &str,
+        target: &str,
+    ) -> Result<(), sqlx::Error> {
+        let retention_full: i64 = std::env::var("OMNIVORE_RETENTION_FULL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+        let retention_summary: i64 = std::env::var("OMNIVORE_RETENTION_SUMMARY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+        let retention_total = retention_full + retention_summary;
+
+        // Strip files_json from snapshots beyond the full retention limit
+        sqlx::query(
+            "UPDATE coverage_snapshots SET files_json = NULL
+             WHERE id IN (
+               SELECT id FROM coverage_snapshots
+               WHERE project_id = ? AND target = ?
+               ORDER BY created_at DESC
+               LIMIT -1 OFFSET ?
+             ) AND files_json IS NOT NULL",
+        )
+        .bind(project_id)
+        .bind(target)
+        .bind(retention_full)
+        .execute(&self.pool)
+        .await?;
+
+        // Delete snapshots beyond the total retention limit
+        sqlx::query(
+            "DELETE FROM coverage_snapshots
+             WHERE id IN (
+               SELECT id FROM coverage_snapshots
+               WHERE project_id = ? AND target = ?
+               ORDER BY created_at DESC
+               LIMIT -1 OFFSET ?
+             )",
+        )
+        .bind(project_id)
+        .bind(target)
+        .bind(retention_total)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }

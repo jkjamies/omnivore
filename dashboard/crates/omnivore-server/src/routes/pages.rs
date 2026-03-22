@@ -18,13 +18,16 @@ pub struct FileTreeNode {
     pub line_rate: f64,
     pub branch_rate: f64,
     pub file_count: usize,
+    /// Delta from previous snapshot (None if file is new or no previous data)
+    pub line_delta: Option<f64>,
+    pub branch_delta: Option<f64>,
 }
 
 /// Build a nested directory tree from a flat list of file coverages.
-fn build_file_tree(files: &[FileCoverage]) -> Vec<FileTreeNode> {
+/// `prev_rates` maps file path → previous line_rate for delta computation.
+fn build_file_tree(files: &[FileCoverage], prev_rates: &std::collections::HashMap<String, (f64, f64)>) -> Vec<FileTreeNode> {
     use std::collections::BTreeMap;
 
-    // Group files by their first path component
     let mut groups: BTreeMap<String, Vec<&FileCoverage>> = BTreeMap::new();
     let mut root_files: Vec<&FileCoverage> = Vec::new();
 
@@ -39,13 +42,12 @@ fn build_file_tree(files: &[FileCoverage]) -> Vec<FileTreeNode> {
 
     let mut nodes = Vec::new();
 
-    // Directories first
     for (dir_name, dir_files) in &groups {
-        nodes.push(build_dir_node(dir_name, "", dir_files));
+        nodes.push(build_dir_node(dir_name, "", dir_files, prev_rates));
     }
 
-    // Then root-level files
     for f in root_files {
+        let prev = prev_rates.get(&f.path);
         nodes.push(FileTreeNode {
             name: f.path.clone(),
             full_path: f.path.clone(),
@@ -54,13 +56,15 @@ fn build_file_tree(files: &[FileCoverage]) -> Vec<FileTreeNode> {
             line_rate: f.line_rate,
             branch_rate: f.branch_rate,
             file_count: 1,
+            line_delta: prev.map(|(lr, _)| f.line_rate - lr),
+            branch_delta: prev.map(|(_, br)| f.branch_rate - br),
         });
     }
 
     nodes
 }
 
-fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage]) -> FileTreeNode {
+fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage], prev_rates: &std::collections::HashMap<String, (f64, f64)>) -> FileTreeNode {
     use std::collections::BTreeMap;
 
     let full_dir = if parent_path.is_empty() {
@@ -70,7 +74,6 @@ fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage]) ->
     };
     let prefix = format!("{}/", full_dir);
 
-    // Strip the prefix from file paths and regroup
     let mut sub_groups: BTreeMap<String, Vec<&FileCoverage>> = BTreeMap::new();
     let mut leaf_files: Vec<&FileCoverage> = Vec::new();
 
@@ -84,22 +87,21 @@ fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage]) ->
         }
     }
 
-    // If there's exactly one subdirectory and no leaf files, collapse it
-    // e.g., "com" → "example" → "app" becomes "com/example/app"
     if sub_groups.len() == 1 && leaf_files.is_empty() {
         let (sub_name, sub_files) = sub_groups.into_iter().next().unwrap();
         let collapsed_name = format!("{}/{}", dir_name, sub_name);
-        return build_dir_node(&collapsed_name, parent_path, &sub_files);
+        return build_dir_node(&collapsed_name, parent_path, &sub_files, prev_rates);
     }
 
     let mut children = Vec::new();
 
     for (sub_name, sub_files) in &sub_groups {
-        children.push(build_dir_node(sub_name, &full_dir, sub_files));
+        children.push(build_dir_node(sub_name, &full_dir, sub_files, prev_rates));
     }
 
     for f in &leaf_files {
         let file_name = f.path.rsplit('/').next().unwrap_or(&f.path).to_string();
+        let prev = prev_rates.get(&f.path);
         children.push(FileTreeNode {
             name: file_name,
             full_path: f.path.clone(),
@@ -108,6 +110,8 @@ fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage]) ->
             line_rate: f.line_rate,
             branch_rate: f.branch_rate,
             file_count: 1,
+            line_delta: prev.map(|(lr, _)| f.line_rate - lr),
+            branch_delta: prev.map(|(_, br)| f.branch_rate - br),
         });
     }
 
@@ -120,6 +124,18 @@ fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage]) ->
     let branch_rate_sum: f64 = files.iter().map(|f| f.branch_rate).sum();
     let branch_rate = if total_branches > 0.0 { branch_rate_sum / total_branches } else { 0.0 };
 
+    // Compute directory-level delta from children
+    let line_delta = if children.iter().any(|c| c.line_delta.is_some()) {
+        Some(children.iter().filter_map(|c| c.line_delta).sum::<f64>() / children.len() as f64)
+    } else {
+        None
+    };
+    let branch_delta = if children.iter().any(|c| c.branch_delta.is_some()) {
+        Some(children.iter().filter_map(|c| c.branch_delta).sum::<f64>() / children.len() as f64)
+    } else {
+        None
+    };
+
     FileTreeNode {
         name: dir_name.to_string(),
         full_path: full_dir,
@@ -128,6 +144,8 @@ fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage]) ->
         line_rate,
         branch_rate,
         file_count: files.len(),
+        line_delta,
+        branch_delta,
     }
 }
 
@@ -154,16 +172,31 @@ pub struct TargetSnapshot {
     pub files: Vec<FileCoverage>,
     pub file_tree: Vec<FileTreeNode>,
     pub trend: Vec<TrendEntry>,
+    /// Delta from previous snapshot (None if no previous)
+    pub line_delta: Option<f64>,
+    pub branch_delta: Option<f64>,
 }
 
 impl TargetSnapshot {
-    fn from_snapshot(snap: &CoverageSnapshot, trend: Vec<TrendEntry>) -> Self {
+    fn from_snapshot(snap: &CoverageSnapshot, prev: Option<&CoverageSnapshot>, trend: Vec<TrendEntry>) -> Self {
         let files: Vec<FileCoverage> = snap
             .files_json
             .as_ref()
             .and_then(|json| serde_json::from_str(json).ok())
             .unwrap_or_default();
-        let file_tree = build_file_tree(&files);
+
+        // Build previous file map for per-file deltas (line_rate, branch_rate)
+        let prev_files: std::collections::HashMap<String, (f64, f64)> = prev
+            .and_then(|p| p.files_json.as_ref())
+            .and_then(|json| serde_json::from_str::<Vec<FileCoverage>>(json).ok())
+            .map(|pf| pf.into_iter().map(|f| (f.path.clone(), (f.line_rate, f.branch_rate))).collect())
+            .unwrap_or_default();
+
+        let file_tree = build_file_tree(&files, &prev_files);
+
+        let line_delta = prev.map(|p| snap.line_rate - p.line_rate);
+        let branch_delta = prev.map(|p| snap.branch_rate - p.branch_rate);
+
         Self {
             target: snap.target.clone(),
             label: target_label(&snap.target),
@@ -177,6 +210,8 @@ impl TargetSnapshot {
             files,
             file_tree,
             trend,
+            line_delta,
+            branch_delta,
         }
     }
 }
@@ -190,6 +225,8 @@ pub struct CompositeSnapshot {
     pub branches_covered: i64,
     pub branches_total: i64,
     pub file_count: i64,
+    pub line_delta: Option<f64>,
+    pub branch_delta: Option<f64>,
 }
 
 fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot> {
@@ -203,6 +240,38 @@ fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot> {
     let file_count: i64 = targets.iter().map(|t| t.file_count).sum();
     let line_rate = if lines_total > 0 { lines_covered as f64 / lines_total as f64 } else { 0.0 };
     let branch_rate = if branches_total > 0 { branches_covered as f64 / branches_total as f64 } else { 0.0 };
+    // Compute composite delta if all targets have deltas
+    let line_delta = if targets.iter().all(|t| t.line_delta.is_some()) {
+        let prev_line_rate = targets.iter()
+            .map(|t| {
+                let prev_covered = t.lines_covered as f64 - t.line_delta.unwrap() * t.lines_total as f64;
+                (prev_covered, t.lines_total as f64)
+            })
+            .fold((0.0, 0.0), |acc, (c, t)| (acc.0 + c, acc.1 + t));
+        if prev_line_rate.1 > 0.0 {
+            Some(line_rate - prev_line_rate.0 / prev_line_rate.1)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let branch_delta = if targets.iter().all(|t| t.branch_delta.is_some()) {
+        let prev_branch_rate = targets.iter()
+            .map(|t| {
+                let prev_covered = t.branches_covered as f64 - t.branch_delta.unwrap() * t.branches_total as f64;
+                (prev_covered, t.branches_total as f64)
+            })
+            .fold((0.0, 0.0), |acc, (c, t)| (acc.0 + c, acc.1 + t));
+        if prev_branch_rate.1 > 0.0 {
+            Some(branch_rate - prev_branch_rate.0 / prev_branch_rate.1)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     Some(CompositeSnapshot {
         line_rate,
         branch_rate,
@@ -211,7 +280,34 @@ fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot> {
         branches_covered,
         branches_total,
         file_count,
+        line_delta,
+        branch_delta,
     })
+}
+
+/// Render a delta value as an HTML badge string.
+fn fmt_delta_html(delta: Option<f64>) -> String {
+    match delta {
+        None => String::new(),
+        Some(d) => {
+            let pct = d * 100.0;
+            if pct.abs() < 0.05 {
+                return String::new();
+            } else if pct > 0.0 {
+                format!(r#"<span class="delta delta-up">(+{:.1}%)</span>"#, pct)
+            } else {
+                format!(r#"<span class="delta delta-down">({:.1}%)</span>"#, pct)
+            }
+        }
+    }
+}
+
+pub struct HotspotFile {
+    pub path: String,
+    pub target_label: String,
+    pub line_rate: f64,
+    pub uncovered_lines: i64,
+    pub total_lines: i64,
 }
 
 fn target_label(target: &str) -> String {
@@ -265,6 +361,9 @@ impl ProjectsPage {
     fn rate_color(&self, rate: &f64) -> &'static str {
         rate_color_val(*rate)
     }
+    fn fmt_delta(&self, delta: &Option<f64>) -> String {
+        fmt_delta_html(*delta)
+    }
 }
 
 #[derive(Template)]
@@ -291,6 +390,9 @@ impl ProjectDetailPage {
     fn rate_color(&self, rate: &f64) -> &'static str {
         rate_color_val(*rate)
     }
+    fn fmt_delta(&self, delta: &Option<f64>) -> String {
+        fmt_delta_html(*delta)
+    }
     fn short_sha<'a>(&self, sha: &'a str) -> &'a str {
         if sha.len() > 7 { &sha[..7] } else { sha }
     }
@@ -307,6 +409,37 @@ impl ProjectDetailPage {
         }).collect();
         serde_json::to_string(&datasets).unwrap_or_else(|_| "[]".to_string())
     }
+    /// Return the top N files with the most uncovered lines across all targets.
+    fn hotspots(&self) -> Vec<HotspotFile> {
+        let mut all: Vec<HotspotFile> = Vec::new();
+        for t in &self.targets {
+            for f in &t.files {
+                let total = f.lines.len() as i64;
+                let covered = f.lines.iter().filter(|l| l.hit_count > 0).count() as i64;
+                let uncovered = total - covered;
+                if uncovered > 0 {
+                    all.push(HotspotFile {
+                        path: f.path.clone(),
+                        target_label: t.label.clone(),
+                        line_rate: f.line_rate,
+                        uncovered_lines: uncovered,
+                        total_lines: total,
+                    });
+                }
+            }
+        }
+        all.sort_by(|a, b| b.uncovered_lines.cmp(&a.uncovered_lines)
+            .then(a.line_rate.partial_cmp(&b.line_rate).unwrap_or(std::cmp::Ordering::Equal)));
+        all.truncate(15);
+        all
+    }
+    fn has_hotspots(&self) -> bool {
+        self.targets.iter().any(|t| t.files.iter().any(|f| {
+            let covered = f.lines.iter().filter(|l| l.hit_count > 0).count();
+            covered < f.lines.len()
+        }))
+    }
+
     /// Render a file tree as flat HTML table rows with data attributes for JS toggle.
     fn render_file_tree(&self, nodes: &[FileTreeNode], depth: usize) -> String {
         let mut html = String::new();
@@ -319,9 +452,10 @@ impl ProjectDetailPage {
             let line_color = rate_color_val(node.line_rate);
             let branch_color = rate_color_val(node.branch_rate);
             let indent_px = depth * 20 + 12;
+            let delta_html = fmt_delta_html(node.line_delta);
+            let branch_delta_html = fmt_delta_html(node.branch_delta);
 
             if node.is_dir {
-                // Use the full_path as a stable ID for parent-child linking
                 let dir_id = html_escape(&node.full_path);
                 let hidden = if depth == 0 { "" } else { " style=\"display:none;\"" };
                 html.push_str(&format!(
@@ -334,24 +468,26 @@ impl ProjectDetailPage {
                     node.file_count,
                 ));
                 html.push_str(&format!(
-                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
-                    line_color, fmt_pct_val(node.line_rate),
+                    r#"<td><span style="font-weight:600;color:{}">{}</span> {}</td>"#,
+                    line_color, fmt_pct_val(node.line_rate), delta_html,
                 ));
                 html.push_str(&format!(
-                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
-                    branch_color, fmt_pct_val(node.branch_rate),
+                    r#"<td><span style="font-weight:600;color:{}">{}</span> {}</td>"#,
+                    branch_color, fmt_pct_val(node.branch_rate), branch_delta_html,
                 ));
                 html.push_str(&format!(
                     r#"<td><div class="coverage-bar"><div class="coverage-bar-fill" style="width:{}%;--rate:{:.4};"></div></div></td>"#,
                     fmt_pct_val(node.line_rate), node.line_rate,
                 ));
                 html.push_str("</tr>");
-                // Recurse children — they reference this dir as parent
                 self.render_file_tree_inner(&node.children, depth + 1, &dir_id, html);
             } else {
                 let hidden = if depth == 0 { "" } else { " style=\"display:none;\"" };
                 html.push_str(&format!(
-                    r#"<tr class="tree-file" data-depth="{depth}" data-parent="{parent_id}"{hidden}>"#,
+                    r#"<tr class="tree-file" data-depth="{depth}" data-parent="{parent_id}" data-path="{path}" data-line-rate="{lr:.6}" data-branch-rate="{br:.6}"{hidden}>"#,
+                    path = html_escape(&node.full_path),
+                    lr = node.line_rate,
+                    br = node.branch_rate,
                 ));
                 html.push_str(&format!(
                     r#"<td style="padding-left:{}px;"><a href="/projects/{}/files/{}" class="file-path">{}</a></td>"#,
@@ -361,12 +497,12 @@ impl ProjectDetailPage {
                     html_escape(&node.name),
                 ));
                 html.push_str(&format!(
-                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
-                    line_color, fmt_pct_val(node.line_rate),
+                    r#"<td><span style="font-weight:600;color:{}">{}</span> {}</td>"#,
+                    line_color, fmt_pct_val(node.line_rate), delta_html,
                 ));
                 html.push_str(&format!(
-                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
-                    branch_color, fmt_pct_val(node.branch_rate),
+                    r#"<td><span style="font-weight:600;color:{}">{}</span> {}</td>"#,
+                    branch_color, fmt_pct_val(node.branch_rate), branch_delta_html,
                 ));
                 html.push_str(&format!(
                     r#"<td><div class="coverage-bar"><div class="coverage-bar-fill" style="width:{}%;--rate:{:.4};"></div></div></td>"#,
@@ -402,8 +538,13 @@ pub async fn projects_page(
             .unwrap_or_default();
         let mut targets = Vec::new();
         for tname in &target_names {
-            if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(&project.id, tname).await {
-                targets.push(TargetSnapshot::from_snapshot(&snap, vec![]));
+            let snaps = db
+                .get_snapshots_for_project_by_target(&project.id, tname, 2)
+                .await
+                .unwrap_or_default();
+            if let Some(snap) = snaps.first() {
+                let prev = snaps.get(1);
+                targets.push(TargetSnapshot::from_snapshot(snap, prev, vec![]));
             }
         }
 
@@ -438,11 +579,12 @@ pub async fn project_detail_page(
 
     let mut targets = Vec::new();
     for tname in &target_names {
-        if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(&project_id, tname).await {
-            let snaps = db
-                .get_snapshots_for_project_by_target(&project_id, tname, 30)
-                .await
-                .unwrap_or_default();
+        let snaps = db
+            .get_snapshots_for_project_by_target(&project_id, tname, 30)
+            .await
+            .unwrap_or_default();
+        if let Some(snap) = snaps.first() {
+            let prev = snaps.get(1);
             let mut trend: Vec<TrendEntry> = snaps
                 .iter()
                 .map(|s| TrendEntry {
@@ -452,7 +594,7 @@ pub async fn project_detail_page(
                 })
                 .collect();
             trend.reverse();
-            targets.push(TargetSnapshot::from_snapshot(&snap, trend));
+            targets.push(TargetSnapshot::from_snapshot(snap, prev, trend));
         }
     }
 
@@ -497,6 +639,8 @@ pub struct FileCoveragePage {
     project: Project,
     file_path: String,
     file: FileCoverage,
+    line_delta: Option<f64>,
+    branch_delta: Option<f64>,
 }
 
 impl FileCoveragePage {
@@ -505,6 +649,9 @@ impl FileCoveragePage {
     }
     fn rate_color(&self, rate: &f64) -> &'static str {
         rate_color_val(*rate)
+    }
+    fn fmt_delta(&self, delta: &Option<f64>) -> String {
+        fmt_delta_html(*delta)
     }
     fn covered_count(&self) -> usize {
         self.file.lines.iter().filter(|l| l.hit_count > 0).count()
@@ -606,9 +753,9 @@ pub async fn file_coverage_page(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let file = find_file_across_targets(&db, &project_id, &file_path).await?;
+    let (file, line_delta, branch_delta) = find_file_with_delta(&db, &project_id, &file_path).await?;
 
-    let page = FileCoveragePage { project, file_path, file };
+    let page = FileCoveragePage { project, file_path, file, line_delta, branch_delta };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))
 }
@@ -663,6 +810,8 @@ pub async fn file_source_fragment(
         project,
         file_path,
         file,
+        line_delta: None,
+        branch_delta: None,
     };
     let rows = page.line_rows();
     let mut html = String::new();
@@ -707,6 +856,52 @@ async fn find_file_across_targets(
                 .unwrap_or_default();
             if let Some(f) = files.into_iter().find(|f| f.path == file_path) {
                 return Ok(f);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+/// Like `find_file_across_targets`, but also returns per-file deltas from the previous snapshot.
+async fn find_file_with_delta(
+    db: &Database,
+    project_id: &str,
+    file_path: &str,
+) -> Result<(FileCoverage, Option<f64>, Option<f64>), StatusCode> {
+    let target_names = db
+        .get_targets_for_project(project_id)
+        .await
+        .unwrap_or_default();
+
+    for tname in &target_names {
+        let snaps = db
+            .get_snapshots_for_project_by_target(project_id, tname, 2)
+            .await
+            .unwrap_or_default();
+
+        if let Some(snap) = snaps.first() {
+            let files: Vec<FileCoverage> = snap
+                .files_json
+                .as_ref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+            if let Some(f) = files.into_iter().find(|f| f.path == file_path) {
+                let (line_delta, branch_delta) = if let Some(prev) = snaps.get(1) {
+                    let prev_files: Vec<FileCoverage> = prev
+                        .files_json
+                        .as_ref()
+                        .and_then(|json| serde_json::from_str(json).ok())
+                        .unwrap_or_default();
+                    if let Some(pf) = prev_files.iter().find(|pf| pf.path == file_path) {
+                        (Some(f.line_rate - pf.line_rate), Some(f.branch_rate - pf.branch_rate))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+                return Ok((f, line_delta, branch_delta));
             }
         }
     }
