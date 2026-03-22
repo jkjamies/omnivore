@@ -40,7 +40,7 @@
       <div class="stat-label">Line Coverage</div>
       <div class="stat-value" style="color:{{ self.rate_color(comp.line_rate) }}">{{ self.fmt_pct(comp.line_rate) }}%</div>
       <div class="coverage-bar">
-        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(comp.line_rate) }}%;background:{{ self.rate_color(comp.line_rate) }};"></div>
+        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(comp.line_rate) }}%;--rate:{{ comp.line_rate }};"></div>
       </div>
       <div class="stat-detail">{{ comp.lines_covered }} / {{ comp.lines_total }} lines</div>
     </div>
@@ -48,7 +48,7 @@
       <div class="stat-label">Branch Coverage</div>
       <div class="stat-value" style="color:{{ self.rate_color(comp.branch_rate) }}">{{ self.fmt_pct(comp.branch_rate) }}%</div>
       <div class="coverage-bar">
-        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(comp.branch_rate) }}%;background:{{ self.rate_color(comp.branch_rate) }};"></div>
+        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(comp.branch_rate) }}%;--rate:{{ comp.branch_rate }};"></div>
       </div>
       <div class="stat-detail">{{ comp.branches_covered }} / {{ comp.branches_total }} branches</div>
     </div>
@@ -72,7 +72,7 @@
       <div class="stat-label">Line Coverage</div>
       <div class="stat-value" style="color:{{ self.rate_color(t.line_rate) }}">{{ self.fmt_pct(t.line_rate) }}%</div>
       <div class="coverage-bar">
-        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(t.line_rate) }}%;background:{{ self.rate_color(t.line_rate) }};"></div>
+        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(t.line_rate) }}%;--rate:{{ t.line_rate }};"></div>
       </div>
       <div class="stat-detail">{{ t.lines_covered }} / {{ t.lines_total }} lines</div>
     </div>
@@ -80,7 +80,7 @@
       <div class="stat-label">Branch Coverage</div>
       <div class="stat-value" style="color:{{ self.rate_color(t.branch_rate) }}">{{ self.fmt_pct(t.branch_rate) }}%</div>
       <div class="coverage-bar">
-        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(t.branch_rate) }}%;background:{{ self.rate_color(t.branch_rate) }};"></div>
+        <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(t.branch_rate) }}%;--rate:{{ t.branch_rate }};"></div>
       </div>
       <div class="stat-detail">{{ t.branches_covered }} / {{ t.branches_total }} branches</div>
     </div>
@@ -102,36 +102,21 @@
     </div>
   </div>
 
-  {% if !t.files.is_empty() %}
-  <details class="file-breakdown">
+  {% if !t.file_tree.is_empty() %}
+  <details class="file-breakdown" open>
     <summary>File Breakdown ({{ t.files.len() }} files)</summary>
     <div class="table-wrap">
-      <table>
+      <table class="file-tree-table">
         <thead>
           <tr>
             <th>File</th>
-            <th style="width:140px;">Line Coverage</th>
-            <th style="width:140px;">Branch Coverage</th>
-            <th style="width:180px;"></th>
+            <th style="width:120px;">Lines</th>
+            <th style="width:120px;">Branches</th>
+            <th style="width:160px;"></th>
           </tr>
         </thead>
         <tbody>
-          {% for f in t.files %}
-          <tr>
-            <td><a href="/projects/{{ project.id }}/files/{{ f.path }}" class="file-path">{{ f.path }}</a></td>
-            <td>
-              <span style="font-weight:600;color:{{ self.rate_color(f.line_rate) }}">{{ self.fmt_pct(f.line_rate) }}%</span>
-            </td>
-            <td>
-              <span style="font-weight:600;color:{{ self.rate_color(f.branch_rate) }}">{{ self.fmt_pct(f.branch_rate) }}%</span>
-            </td>
-            <td>
-              <div class="coverage-bar">
-                <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(f.line_rate) }}%;background:{{ self.rate_color(f.line_rate) }};"></div>
-              </div>
-            </td>
-          </tr>
-          {% endfor %}
+          {{ self.render_file_tree(t.file_tree, 0)|safe }}
         </tbody>
       </table>
     </div>
@@ -164,6 +149,49 @@
   <p>This project has no coverage snapshots yet. Run tests with the Omnivore plugin and upload the report.</p>
 </div>
 {% endif %}
+
+<script>
+function toggleDir(row, dirId) {
+  var arrow = row.querySelector('.tree-arrow');
+  var isOpen = arrow.classList.contains('open');
+  if (isOpen) {
+    arrow.classList.remove('open');
+    collapseDir(dirId);
+  } else {
+    arrow.classList.add('open');
+    expandDir(dirId);
+  }
+}
+function expandDir(dirId) {
+  var rows = document.querySelectorAll('tr[data-parent="' + dirId + '"]');
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].style.display = '';
+  }
+}
+function collapseDir(dirId) {
+  var rows = document.querySelectorAll('tr[data-parent="' + dirId + '"]');
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].style.display = 'none';
+    // Also collapse any open sub-directories
+    var subDirId = rows[i].getAttribute('data-dir');
+    if (subDirId) {
+      var arrow = rows[i].querySelector('.tree-arrow');
+      if (arrow) arrow.classList.remove('open');
+      collapseDir(subDirId);
+    }
+  }
+}
+// Auto-expand top-level directories on load
+document.addEventListener('DOMContentLoaded', function() {
+  var topDirs = document.querySelectorAll('tr.tree-dir[data-depth="0"]');
+  for (var i = 0; i < topDirs.length; i++) {
+    var dirId = topDirs[i].getAttribute('data-dir');
+    var arrow = topDirs[i].querySelector('.tree-arrow');
+    if (arrow) arrow.classList.add('open');
+    expandDir(dirId);
+  }
+});
+</script>
 
 {% if self.has_trend() %}
 <script>

@@ -121,6 +121,13 @@ main { padding: 32px 0; }
   height: 100%;
   border-radius: 4px;
   transition: width 0.4s ease;
+  background: linear-gradient(to right,
+    var(--red) 0%,
+    var(--yellow) 50%,
+    var(--green) 80%,
+    var(--green) 100%
+  );
+  background-size: calc(100% / var(--rate, 1)) 100%;
 }
 
 /* Badge */
@@ -465,6 +472,53 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
 .legend-covered { background: rgba(46,204,113,0.3); border: 1px solid var(--green); }
 .legend-uncovered { background: rgba(231,76,60,0.3); border: 1px solid var(--red); }
 .legend-none { background: var(--bg); border: 1px solid var(--border); }
+
+/* File tree */
+.file-tree-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  table-layout: fixed;
+}
+.file-tree-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 10px 12px;
+  border-bottom: 2px solid var(--border);
+}
+.file-tree-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.file-tree-table tr:hover > td {
+  background: var(--bg-hover);
+}
+.tree-dir > td:first-child {
+  user-select: none;
+}
+.tree-arrow {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  width: 12px;
+}
+.tree-arrow.open {
+  transform: rotate(90deg);
+}
+.tree-icon {
+  font-size: 14px;
+}
+.tree-count {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
 
 @media (max-width: 768px) {
   .stats { grid-template-columns: 1fr 1fr; }
