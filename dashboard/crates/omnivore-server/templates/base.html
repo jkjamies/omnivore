@@ -1,5 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
+<script>
+(function(){var t=localStorage.getItem('omnivore-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();
+</script>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,6 +18,7 @@
       <nav>
         <a href="/">Projects</a>
         <a href="/settings">Settings</a>
+        <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme"></button>
       </nav>
     </div>
   </header>
@@ -23,5 +27,24 @@
       {% block content %}{% endblock %}
     </div>
   </main>
+<script>
+(function(){
+  var btn = document.getElementById('theme-toggle');
+  function isDark() {
+    var t = document.documentElement.getAttribute('data-theme');
+    if (t === 'dark') return true;
+    if (t === 'light') return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  function update() { btn.textContent = isDark() ? '\u2600\uFE0F' : '\uD83C\uDF19'; }
+  btn.addEventListener('click', function() {
+    var next = isDark() ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('omnivore-theme', next);
+    update();
+  });
+  update();
+})();
+</script>
 </body>
 </html>

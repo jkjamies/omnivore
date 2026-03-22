@@ -14,6 +14,7 @@ pub struct ProjectWithLatest {
     pub targets: Vec<TargetSnapshot>,
     pub effective_line_threshold: f64,
     pub effective_line_warn_threshold: f64,
+    pub sparkline: String,
 }
 
 pub struct HomeSummary {
@@ -65,16 +66,26 @@ pub async fn projects_page(
             .await
             .unwrap_or_default();
         let mut targets = Vec::new();
+        let mut sparkline_points: Vec<f64> = Vec::new();
         for tname in &target_names {
             let snaps = db
-                .get_snapshots_for_project_by_target(&project.id, tname, 2)
+                .get_snapshots_for_project_by_target(&project.id, tname, 15)
                 .await
                 .unwrap_or_default();
             if let Some(snap) = snaps.first() {
                 let prev = snaps.get(1);
                 targets.push(TargetSnapshot::from_snapshot(snap, prev, vec![]));
             }
+            // Use the first target's trend for the sparkline
+            if sparkline_points.is_empty() {
+                sparkline_points = snaps.iter().rev().map(|s| s.line_rate).collect();
+            }
         }
+        let sparkline = sparkline_points
+            .iter()
+            .map(|r| format!("{:.3}", r))
+            .collect::<Vec<_>>()
+            .join(",");
 
         let effective_line_threshold = project
             .line_threshold
@@ -82,7 +93,7 @@ pub async fn projects_page(
         let effective_line_warn_threshold = project
             .line_warn_threshold
             .unwrap_or(global_settings.default_line_warn_threshold);
-        items.push(ProjectWithLatest { project, latest, targets, effective_line_threshold, effective_line_warn_threshold });
+        items.push(ProjectWithLatest { project, latest, targets, effective_line_threshold, effective_line_warn_threshold, sparkline });
     }
 
     let summary = if items.is_empty() {

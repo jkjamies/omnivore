@@ -1,0 +1,155 @@
+name: 'Omnivore Upload Coverage'
+description: 'Upload coverage reports to an Omnivore dashboard instance'
+branding:
+  icon: 'bar-chart-2'
+  color: 'green'
+
+inputs:
+  server:
+    description: 'Omnivore dashboard URL (e.g., https://omnivore.example.com)'
+    required: true
+  project_id:
+    description: 'Project identifier in the dashboard'
+    required: true
+  files:
+    description: |
+      Coverage files to upload. One per line, with optional target label:
+        path/to/coverage.json
+        path/to/unit.xml:JvmUnit
+        path/to/instrumented.xml:AndroidInstrumented
+      If no target is specified, the server uses the default from the report.
+    required: true
+  format:
+    description: 'Coverage format: omnivore, lcov, llvm-cov, go, python (auto-detected if omitted)'
+    required: false
+    default: ''
+  project_name:
+    description: 'Display name for the project (defaults to project_id)'
+    required: false
+    default: ''
+  api_key:
+    description: 'API key for authentication (when server requires it)'
+    required: false
+    default: ''
+  github_token:
+    description: 'GitHub token for PR comment integration'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Upload coverage to Omnivore
+      id: upload
+      shell: bash
+      env:
+        INPUT_SERVER: ${{ inputs.server }}
+        INPUT_PROJECT_ID: ${{ inputs.project_id }}
+        INPUT_FILES: ${{ inputs.files }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_PROJECT_NAME: ${{ inputs.project_name }}
+        INPUT_API_KEY: ${{ inputs.api_key }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: |
+        # Build base query parameters
+        BASE_PARAMS="project_id=$(printf '%s' "$INPUT_PROJECT_ID" | jq -sRr @uri)"
+
+        PROJECT_NAME="${INPUT_PROJECT_NAME:-$INPUT_PROJECT_ID}"
+        BASE_PARAMS="${BASE_PARAMS}&project_name=$(printf '%s' "$PROJECT_NAME" | jq -sRr @uri)"
+
+        if [ -n "$INPUT_FORMAT" ]; then
+          BASE_PARAMS="${BASE_PARAMS}&format=${INPUT_FORMAT}"
+        fi
+
+        # Add git context from GitHub environment
+        if [ -n "$GITHUB_SHA" ]; then
+          BASE_PARAMS="${BASE_PARAMS}&commit_sha=${GITHUB_SHA}"
+        fi
+
+        if [ -n "$GITHUB_HEAD_REF" ]; then
+          BRANCH="$GITHUB_HEAD_REF"
+        elif [ -n "$GITHUB_REF_NAME" ]; then
+          BRANCH="$GITHUB_REF_NAME"
+        fi
+        if [ -n "$BRANCH" ]; then
+          BASE_PARAMS="${BASE_PARAMS}&branch=$(printf '%s' "$BRANCH" | jq -sRr @uri)"
+        fi
+
+        # Add PR context if available
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          PR_NUMBER=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+          if [ -n "$PR_NUMBER" ]; then
+            BASE_PARAMS="${BASE_PARAMS}&pr_number=${PR_NUMBER}"
+          fi
+          REPO="${GITHUB_REPOSITORY}"
+          if [ -n "$REPO" ]; then
+            BASE_PARAMS="${BASE_PARAMS}&github_repo=$(printf '%s' "$REPO" | jq -sRr @uri)"
+          fi
+        fi
+
+        # Build headers
+        HEADERS=()
+        if [ -n "$INPUT_API_KEY" ]; then
+          HEADERS+=(-H "Authorization: Bearer ${INPUT_API_KEY}")
+        fi
+        if [ -n "$INPUT_GITHUB_TOKEN" ]; then
+          HEADERS+=(-H "X-GitHub-Token: ${INPUT_GITHUB_TOKEN}")
+        fi
+
+        # Upload each file
+        FAILED=0
+        UPLOADED=0
+
+        while IFS= read -r line; do
+          # Skip empty lines
+          line=$(echo "$line" | xargs)
+          [ -z "$line" ] && continue
+
+          # Parse file:target format
+          if [[ "$line" == *:* ]]; then
+            FILE="${line%%:*}"
+            TARGET="${line#*:}"
+          else
+            FILE="$line"
+            TARGET=""
+          fi
+
+          if [ ! -f "$FILE" ]; then
+            echo "::error::Coverage file not found: $FILE"
+            FAILED=1
+            continue
+          fi
+
+          # Build per-file params
+          PARAMS="$BASE_PARAMS"
+          if [ -n "$TARGET" ]; then
+            PARAMS="${PARAMS}&target=$(printf '%s' "$TARGET" | jq -sRr @uri)"
+          fi
+
+          URL="${INPUT_SERVER%/}/api/v1/ingest/coverage?${PARAMS}"
+
+          echo "Uploading: $FILE${TARGET:+ (target: $TARGET)}"
+
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "$URL" \
+            "${HEADERS[@]}" \
+            --data-binary "@${FILE}" \
+            2>&1)
+
+          HTTP_BODY=$(echo "$HTTP_RESPONSE" | head -n -1)
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n 1)
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "  OK (HTTP ${HTTP_STATUS})"
+            UPLOADED=$((UPLOADED + 1))
+          else
+            echo "::error::Upload failed for $FILE (HTTP ${HTTP_STATUS}): ${HTTP_BODY}"
+            FAILED=1
+          fi
+        done <<< "$INPUT_FILES"
+
+        echo "Uploaded ${UPLOADED} file(s) to Omnivore"
+
+        if [ "$FAILED" -ne 0 ]; then
+          exit 1
+        fi
