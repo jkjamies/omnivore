@@ -6,6 +6,131 @@ use omnivore_core::model::coverage::{CoverageSnapshot, DependencyGraph, FileCove
 use omnivore_core::model::project::Project;
 use omnivore_core::storage::Database;
 
+// -- Directory tree for file breakdown --
+
+/// A node in the file tree: either a directory (with children) or a leaf file.
+pub struct FileTreeNode {
+    pub name: String,
+    pub full_path: String,
+    pub is_dir: bool,
+    pub children: Vec<FileTreeNode>,
+    /// Aggregate line coverage rate for directories, file rate for leaves.
+    pub line_rate: f64,
+    pub branch_rate: f64,
+    pub file_count: usize,
+}
+
+/// Build a nested directory tree from a flat list of file coverages.
+fn build_file_tree(files: &[FileCoverage]) -> Vec<FileTreeNode> {
+    use std::collections::BTreeMap;
+
+    // Group files by their first path component
+    let mut groups: BTreeMap<String, Vec<&FileCoverage>> = BTreeMap::new();
+    let mut root_files: Vec<&FileCoverage> = Vec::new();
+
+    for f in files {
+        if let Some(idx) = f.path.find('/') {
+            let dir = f.path[..idx].to_string();
+            groups.entry(dir).or_default().push(f);
+        } else {
+            root_files.push(f);
+        }
+    }
+
+    let mut nodes = Vec::new();
+
+    // Directories first
+    for (dir_name, dir_files) in &groups {
+        nodes.push(build_dir_node(dir_name, "", dir_files));
+    }
+
+    // Then root-level files
+    for f in root_files {
+        nodes.push(FileTreeNode {
+            name: f.path.clone(),
+            full_path: f.path.clone(),
+            is_dir: false,
+            children: vec![],
+            line_rate: f.line_rate,
+            branch_rate: f.branch_rate,
+            file_count: 1,
+        });
+    }
+
+    nodes
+}
+
+fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage]) -> FileTreeNode {
+    use std::collections::BTreeMap;
+
+    let full_dir = if parent_path.is_empty() {
+        dir_name.to_string()
+    } else {
+        format!("{}/{}", parent_path, dir_name)
+    };
+    let prefix = format!("{}/", full_dir);
+
+    // Strip the prefix from file paths and regroup
+    let mut sub_groups: BTreeMap<String, Vec<&FileCoverage>> = BTreeMap::new();
+    let mut leaf_files: Vec<&FileCoverage> = Vec::new();
+
+    for f in files {
+        let relative = f.path.strip_prefix(&prefix).unwrap_or(&f.path);
+        if let Some(idx) = relative.find('/') {
+            let sub_dir = relative[..idx].to_string();
+            sub_groups.entry(sub_dir).or_default().push(f);
+        } else {
+            leaf_files.push(f);
+        }
+    }
+
+    // If there's exactly one subdirectory and no leaf files, collapse it
+    // e.g., "com" → "example" → "app" becomes "com/example/app"
+    if sub_groups.len() == 1 && leaf_files.is_empty() {
+        let (sub_name, sub_files) = sub_groups.into_iter().next().unwrap();
+        let collapsed_name = format!("{}/{}", dir_name, sub_name);
+        return build_dir_node(&collapsed_name, parent_path, &sub_files);
+    }
+
+    let mut children = Vec::new();
+
+    for (sub_name, sub_files) in &sub_groups {
+        children.push(build_dir_node(sub_name, &full_dir, sub_files));
+    }
+
+    for f in &leaf_files {
+        let file_name = f.path.rsplit('/').next().unwrap_or(&f.path).to_string();
+        children.push(FileTreeNode {
+            name: file_name,
+            full_path: f.path.clone(),
+            is_dir: false,
+            children: vec![],
+            line_rate: f.line_rate,
+            branch_rate: f.branch_rate,
+            file_count: 1,
+        });
+    }
+
+    // Aggregate coverage for the directory
+    let total_lines: i64 = files.iter().map(|f| f.lines.len() as i64).sum();
+    let covered_lines: i64 = files.iter().map(|f| f.lines.iter().filter(|l| l.hit_count > 0).count() as i64).sum();
+    let line_rate = if total_lines > 0 { covered_lines as f64 / total_lines as f64 } else { 0.0 };
+
+    let total_branches: f64 = files.len() as f64;
+    let branch_rate_sum: f64 = files.iter().map(|f| f.branch_rate).sum();
+    let branch_rate = if total_branches > 0.0 { branch_rate_sum / total_branches } else { 0.0 };
+
+    FileTreeNode {
+        name: dir_name.to_string(),
+        full_path: full_dir,
+        is_dir: true,
+        children,
+        line_rate,
+        branch_rate,
+        file_count: files.len(),
+    }
+}
+
 // -- Helper types --
 
 pub struct ProjectWithLatest {
@@ -27,6 +152,7 @@ pub struct TargetSnapshot {
     pub branches_total: i64,
     pub file_count: i64,
     pub files: Vec<FileCoverage>,
+    pub file_tree: Vec<FileTreeNode>,
     pub trend: Vec<TrendEntry>,
 }
 
@@ -37,6 +163,7 @@ impl TargetSnapshot {
             .as_ref()
             .and_then(|json| serde_json::from_str(json).ok())
             .unwrap_or_default();
+        let file_tree = build_file_tree(&files);
         Self {
             target: snap.target.clone(),
             label: target_label(&snap.target),
@@ -48,6 +175,7 @@ impl TargetSnapshot {
             branches_total: snap.branches_total,
             file_count: snap.file_count,
             files,
+            file_tree,
             trend,
         }
     }
@@ -120,6 +248,8 @@ fn rate_color_val(rate: f64) -> &'static str {
     }
 }
 
+
+
 // -- Templates --
 
 #[derive(Template)]
@@ -176,6 +306,75 @@ impl ProjectDetailPage {
             })
         }).collect();
         serde_json::to_string(&datasets).unwrap_or_else(|_| "[]".to_string())
+    }
+    /// Render a file tree as flat HTML table rows with data attributes for JS toggle.
+    fn render_file_tree(&self, nodes: &[FileTreeNode], depth: usize) -> String {
+        let mut html = String::new();
+        self.render_file_tree_inner(nodes, depth, "", &mut html);
+        html
+    }
+
+    fn render_file_tree_inner(&self, nodes: &[FileTreeNode], depth: usize, parent_id: &str, html: &mut String) {
+        for node in nodes {
+            let line_color = rate_color_val(node.line_rate);
+            let branch_color = rate_color_val(node.branch_rate);
+            let indent_px = depth * 20 + 12;
+
+            if node.is_dir {
+                // Use the full_path as a stable ID for parent-child linking
+                let dir_id = html_escape(&node.full_path);
+                let hidden = if depth == 0 { "" } else { " style=\"display:none;\"" };
+                html.push_str(&format!(
+                    r#"<tr class="tree-dir" data-depth="{depth}" data-dir="{dir_id}" data-parent="{parent_id}"{hidden} onclick="toggleDir(this, '{dir_id}')">"#,
+                ));
+                html.push_str(&format!(
+                    r#"<td style="padding-left:{}px;cursor:pointer;"><span class="tree-arrow" data-dir="{dir_id}">&#x25B6;</span> <span class="tree-icon">&#x1F4C1;</span> <strong>{}</strong> <span class="tree-count">({} files)</span></td>"#,
+                    indent_px,
+                    html_escape(&node.name),
+                    node.file_count,
+                ));
+                html.push_str(&format!(
+                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
+                    line_color, fmt_pct_val(node.line_rate),
+                ));
+                html.push_str(&format!(
+                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
+                    branch_color, fmt_pct_val(node.branch_rate),
+                ));
+                html.push_str(&format!(
+                    r#"<td><div class="coverage-bar"><div class="coverage-bar-fill" style="width:{}%;--rate:{:.4};"></div></div></td>"#,
+                    fmt_pct_val(node.line_rate), node.line_rate,
+                ));
+                html.push_str("</tr>");
+                // Recurse children — they reference this dir as parent
+                self.render_file_tree_inner(&node.children, depth + 1, &dir_id, html);
+            } else {
+                let hidden = if depth == 0 { "" } else { " style=\"display:none;\"" };
+                html.push_str(&format!(
+                    r#"<tr class="tree-file" data-depth="{depth}" data-parent="{parent_id}"{hidden}>"#,
+                ));
+                html.push_str(&format!(
+                    r#"<td style="padding-left:{}px;"><a href="/projects/{}/files/{}" class="file-path">{}</a></td>"#,
+                    indent_px,
+                    html_escape(&self.project.id),
+                    html_escape(&node.full_path),
+                    html_escape(&node.name),
+                ));
+                html.push_str(&format!(
+                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
+                    line_color, fmt_pct_val(node.line_rate),
+                ));
+                html.push_str(&format!(
+                    r#"<td><span style="font-weight:600;color:{}">{}</span></td>"#,
+                    branch_color, fmt_pct_val(node.branch_rate),
+                ));
+                html.push_str(&format!(
+                    r#"<td><div class="coverage-bar"><div class="coverage-bar-fill" style="width:{}%;--rate:{:.4};"></div></div></td>"#,
+                    fmt_pct_val(node.line_rate), node.line_rate,
+                ));
+                html.push_str("</tr>");
+            }
+        }
     }
 }
 
