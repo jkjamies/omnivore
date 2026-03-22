@@ -42,7 +42,7 @@
       <div class="coverage-bar">
         <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(comp.line_rate) }}%;--rate:{{ comp.line_rate }};"></div>
       </div>
-      <div class="stat-detail">{{ comp.lines_covered }} / {{ comp.lines_total }} lines</div>
+      <div class="stat-detail">{{ comp.lines_covered }} / {{ comp.lines_total }} lines {{ self.fmt_delta(comp.line_delta)|safe }}</div>
     </div>
     <div class="composite-stat">
       <div class="stat-label">Branch Coverage</div>
@@ -50,7 +50,7 @@
       <div class="coverage-bar">
         <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(comp.branch_rate) }}%;--rate:{{ comp.branch_rate }};"></div>
       </div>
-      <div class="stat-detail">{{ comp.branches_covered }} / {{ comp.branches_total }} branches</div>
+      <div class="stat-detail">{{ comp.branches_covered }} / {{ comp.branches_total }} branches {{ self.fmt_delta(comp.branch_delta)|safe }}</div>
     </div>
     <div class="composite-stat">
       <div class="stat-label">Total Files</div>
@@ -74,7 +74,7 @@
       <div class="coverage-bar">
         <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(t.line_rate) }}%;--rate:{{ t.line_rate }};"></div>
       </div>
-      <div class="stat-detail">{{ t.lines_covered }} / {{ t.lines_total }} lines</div>
+      <div class="stat-detail">{{ t.lines_covered }} / {{ t.lines_total }} lines {{ self.fmt_delta(t.line_delta)|safe }}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Branch Coverage</div>
@@ -82,7 +82,7 @@
       <div class="coverage-bar">
         <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(t.branch_rate) }}%;--rate:{{ t.branch_rate }};"></div>
       </div>
-      <div class="stat-detail">{{ t.branches_covered }} / {{ t.branches_total }} branches</div>
+      <div class="stat-detail">{{ t.branches_covered }} / {{ t.branches_total }} branches {{ self.fmt_delta(t.branch_delta)|safe }}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Files</div>
@@ -105,13 +105,17 @@
   {% if !t.file_tree.is_empty() %}
   <details class="file-breakdown" open>
     <summary>File Breakdown ({{ t.files.len() }} files)</summary>
+    <div class="file-search-wrap">
+      <input type="text" class="file-search" placeholder="Filter files..." oninput="filterTree(this)">
+      <button type="button" class="file-search-clear" onclick="clearFilter(this)" aria-label="Clear filter">&times;</button>
+    </div>
     <div class="table-wrap">
       <table class="file-tree-table">
         <thead>
           <tr>
             <th>File</th>
-            <th style="width:120px;">Lines</th>
-            <th style="width:120px;">Branches</th>
+            <th style="width:120px;" class="sortable-th" onclick="sortTreeCol(this, 'line')">Lines <span class="sort-indicator"></span></th>
+            <th style="width:120px;" class="sortable-th" onclick="sortTreeCol(this, 'branch')">Branches <span class="sort-indicator"></span></th>
             <th style="width:160px;"></th>
           </tr>
         </thead>
@@ -124,6 +128,39 @@
   {% endif %}
 </div>
 {% endfor %}
+
+{# -- Uncovered hotspots -- #}
+{% if self.has_hotspots() %}
+<div class="card">
+  <div class="card-header">
+    <h2>Uncovered Hotspots</h2>
+    <span class="badge badge-red">needs tests</span>
+  </div>
+  <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">Files with the most uncovered lines — focus testing effort here.</p>
+  <div class="table-wrap">
+    <table class="hotspot-table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th style="width:100px;">Uncovered</th>
+          <th style="width:100px;">Coverage</th>
+          <th style="width:160px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in self.hotspots() %}
+        <tr>
+          <td><a href="/projects/{{ project.id }}/files/{{ h.path }}" class="file-path">{{ h.path }}</a></td>
+          <td><span class="hotspot-uncovered">{{ h.uncovered_lines }}</span> <span class="hotspot-total">/ {{ h.total_lines }}</span></td>
+          <td><span style="font-weight:600;color:{{ self.rate_color(h.line_rate) }}">{{ self.fmt_pct(h.line_rate) }}%</span></td>
+          <td><div class="coverage-bar"><div class="coverage-bar-fill" style="width:{{ self.fmt_pct(h.line_rate) }}%;--rate:{{ h.line_rate }};"></div></div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 {% if has_dependencies %}
 <div style="margin-bottom:16px;">
@@ -191,6 +228,180 @@ document.addEventListener('DOMContentLoaded', function() {
     expandDir(dirId);
   }
 });
+
+// File search/filter
+function filterTree(input) {
+  var query = input.value.toLowerCase().trim();
+  var table = input.closest('.file-breakdown').querySelector('.file-tree-table');
+  var rows = table.querySelectorAll('tbody tr');
+
+  if (!query) {
+    // Reset: hide all, then re-expand top-level
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].style.display = 'none';
+      rows[i].classList.remove('filter-match');
+    }
+    var topDirs = table.querySelectorAll('tr.tree-dir[data-depth="0"]');
+    for (var i = 0; i < topDirs.length; i++) {
+      topDirs[i].style.display = '';
+      var dirId = topDirs[i].getAttribute('data-dir');
+      var arrow = topDirs[i].querySelector('.tree-arrow');
+      if (arrow) arrow.classList.add('open');
+      expandDir(dirId);
+    }
+    return;
+  }
+
+  // First pass: find matching files
+  var matchedParents = {};
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var path = row.getAttribute('data-path');
+    if (path && path.toLowerCase().indexOf(query) !== -1) {
+      row.style.display = '';
+      row.classList.add('filter-match');
+      // Show all ancestor directories
+      collectParents(row, matchedParents);
+    } else if (row.classList.contains('tree-file')) {
+      row.style.display = 'none';
+      row.classList.remove('filter-match');
+    }
+  }
+
+  // Second pass: show/hide directories based on whether they have matching descendants
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (row.classList.contains('tree-dir')) {
+      var dirId = row.getAttribute('data-dir');
+      if (matchedParents[dirId]) {
+        row.style.display = '';
+        var arrow = row.querySelector('.tree-arrow');
+        if (arrow) arrow.classList.add('open');
+      } else {
+        row.style.display = 'none';
+        var arrow = row.querySelector('.tree-arrow');
+        if (arrow) arrow.classList.remove('open');
+      }
+    }
+  }
+}
+
+function clearFilter(btn) {
+  var input = btn.parentElement.querySelector('.file-search');
+  input.value = '';
+  filterTree(input);
+  input.focus();
+}
+
+function collectParents(row, parentSet) {
+  var parentId = row.getAttribute('data-parent');
+  while (parentId) {
+    parentSet[parentId] = true;
+    var parentRow = document.querySelector('tr[data-dir="' + parentId + '"]');
+    if (!parentRow) break;
+    parentId = parentRow.getAttribute('data-parent');
+  }
+}
+
+// Column sorting for file tree
+function sortTreeCol(th, col) {
+  var table = th.closest('table');
+  var tbody = table.querySelector('tbody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  var fileRows = rows.filter(function(r) { return r.classList.contains('tree-file'); });
+  var dirRows = rows.filter(function(r) { return r.classList.contains('tree-dir'); });
+
+  // Determine sort direction
+  var current = th.getAttribute('data-sort');
+  // Clear all sort indicators in this table
+  var allTh = table.querySelectorAll('.sortable-th');
+  for (var i = 0; i < allTh.length; i++) {
+    allTh[i].removeAttribute('data-sort');
+    allTh[i].querySelector('.sort-indicator').textContent = '';
+  }
+
+  if (current === 'asc') {
+    // Already ascending → go descending
+    th.setAttribute('data-sort', 'desc');
+    th.querySelector('.sort-indicator').textContent = ' ▼';
+  } else if (current === 'desc') {
+    // Already descending → restore tree view
+    restoreTree(table);
+    return;
+  } else {
+    // Not sorted → sort ascending (worst first)
+    th.setAttribute('data-sort', 'asc');
+    th.querySelector('.sort-indicator').textContent = ' ▲';
+  }
+
+  var attr = col === 'line' ? 'data-line-rate' : 'data-branch-rate';
+  var dir = th.getAttribute('data-sort') === 'asc' ? 1 : -1;
+
+  fileRows.sort(function(a, b) {
+    var va = parseFloat(a.getAttribute(attr)) || 0;
+    var vb = parseFloat(b.getAttribute(attr)) || 0;
+    return (va - vb) * dir;
+  });
+
+  // Hide directory rows, show sorted file rows flat
+  for (var i = 0; i < dirRows.length; i++) {
+    dirRows[i].style.display = 'none';
+  }
+  for (var i = 0; i < fileRows.length; i++) {
+    fileRows[i].style.display = '';
+    fileRows[i].style.paddingLeft = '';
+    // Reset indent to flat
+    var td = fileRows[i].querySelector('td');
+    if (td) td.style.paddingLeft = '12px';
+    tbody.appendChild(fileRows[i]);
+  }
+}
+
+function restoreTree(table) {
+  var tbody = table.querySelector('tbody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+
+  // Re-sort rows by original DOM data-path / data-dir order
+  // Simplest: just restore visibility to tree defaults and re-expand top-level
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (row.classList.contains('tree-dir')) {
+      var depth = parseInt(row.getAttribute('data-depth'));
+      row.style.display = depth === 0 ? '' : 'none';
+      var arrow = row.querySelector('.tree-arrow');
+      if (arrow) {
+        if (depth === 0) {
+          arrow.classList.add('open');
+        } else {
+          arrow.classList.remove('open');
+        }
+      }
+    } else {
+      // File rows: re-apply original indent
+      var depth = parseInt(row.getAttribute('data-depth'));
+      var td = row.querySelector('td');
+      if (td) td.style.paddingLeft = (depth * 20 + 12) + 'px';
+      row.style.display = 'none';
+    }
+  }
+
+  // Sort rows back into DOM order by path
+  rows.sort(function(a, b) {
+    var pa = (a.getAttribute('data-dir') || a.getAttribute('data-path') || '');
+    var pb = (b.getAttribute('data-dir') || b.getAttribute('data-path') || '');
+    return pa.localeCompare(pb);
+  });
+  for (var i = 0; i < rows.length; i++) {
+    tbody.appendChild(rows[i]);
+  }
+
+  // Re-expand top-level
+  var topDirs = table.querySelectorAll('tr.tree-dir[data-depth="0"]');
+  for (var i = 0; i < topDirs.length; i++) {
+    var dirId = topDirs[i].getAttribute('data-dir');
+    expandDir(dirId);
+  }
+}
 </script>
 
 {% if self.has_trend() %}

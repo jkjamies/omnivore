@@ -13,10 +13,12 @@
     <span class="meta-item">
       Line Coverage:
       <strong style="color:{{ self.rate_color(file.line_rate) }}">{{ self.fmt_pct(file.line_rate) }}%</strong>
+      {{ self.fmt_delta(line_delta)|safe }}
     </span>
     <span class="meta-item">
       Branch Coverage:
       <strong style="color:{{ self.rate_color(file.branch_rate) }}">{{ self.fmt_pct(file.branch_rate) }}%</strong>
+      {{ self.fmt_delta(branch_delta)|safe }}
     </span>
     <span class="meta-item">
       {{ self.covered_count() }} / {{ self.total_count() }} lines covered

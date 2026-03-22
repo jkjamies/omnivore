@@ -62,6 +62,11 @@ pub fn build_router(db: Database) -> Router {
             "/api/v1/coverage/{project_id}/dependencies",
             routing::get(routes::coverage::get_dependencies),
         )
+        // Badge
+        .route(
+            "/badge/{project_id}",
+            routing::get(routes::badge::badge),
+        )
         // Static files
         .nest_service("/static", ServeDir::new(static_dir))
         .layer(CorsLayer::permissive())

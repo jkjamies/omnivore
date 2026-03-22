@@ -1,3 +1,4 @@
+pub mod badge;
 pub mod coverage;
 pub mod health;
 pub mod pages;

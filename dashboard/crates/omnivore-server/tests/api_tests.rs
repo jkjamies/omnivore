@@ -489,7 +489,7 @@ async fn end_to_end_test_rig_report() {
     assert_eq!(status, 201);
 
     let resp = json_body(&body);
-    assert_eq!(resp["project_id"], "omnivore-test-rig");
+    assert_eq!(resp["project_id"], "kmp-test-rig");
     assert_eq!(resp["format"], "Omnivore");
 
     // Verify project was created
@@ -498,23 +498,23 @@ async fn end_to_end_test_rig_report() {
         .unwrap();
     let (_, body) = send(db.clone(), req).await;
     let projects = json_body(&body);
-    assert_eq!(projects[0]["id"], "omnivore-test-rig");
+    assert_eq!(projects[0]["id"], "kmp-test-rig");
 
     // Verify latest snapshot
-    let req = Request::get("/api/v1/coverage/omnivore-test-rig/latest")
+    let req = Request::get("/api/v1/coverage/kmp-test-rig/latest")
         .body(Body::empty())
         .unwrap();
     let (status, body) = send(db.clone(), req).await;
     assert_eq!(status, 200);
 
     let snapshot = json_body(&body);
-    assert_eq!(snapshot["project_id"], "omnivore-test-rig");
-    assert!(snapshot["line_rate"].as_f64().unwrap() > 0.70);
-    assert!(snapshot["lines_total"].as_i64().unwrap() > 100);
+    assert_eq!(snapshot["project_id"], "kmp-test-rig");
+    assert!(snapshot["line_rate"].as_f64().unwrap() > 0.50);
+    assert!(snapshot["lines_total"].as_i64().unwrap() > 50);
     assert!(snapshot["files_json"].is_string());
 
     // Verify trend
-    let req = Request::get("/api/v1/coverage/omnivore-test-rig/trend")
+    let req = Request::get("/api/v1/coverage/kmp-test-rig/trend")
         .body(Body::empty())
         .unwrap();
     let (status, body) = send(db.clone(), req).await;
@@ -527,13 +527,85 @@ async fn end_to_end_test_rig_report() {
     let (status, body) = send(db.clone(), req).await;
     assert_eq!(status, 200);
     let html = String::from_utf8(body).unwrap();
-    assert!(html.contains("omnivore-test-rig"));
+    assert!(html.contains("kmp-test-rig"));
 
-    let req = Request::get("/projects/omnivore-test-rig")
+    let req = Request::get("/projects/kmp-test-rig")
         .body(Body::empty())
         .unwrap();
     let (status, body) = send(db, req).await;
     assert_eq!(status, 200);
     let html = String::from_utf8(body).unwrap();
-    assert!(html.contains("omnivore-test-rig"));
+    assert!(html.contains("kmp-test-rig"));
+}
+
+// ── Retention pruning ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn retention_prunes_old_snapshots() {
+    use omnivore_core::model::coverage::CoverageSnapshot;
+    use chrono::Utc;
+
+    // Set low retention limits for testing
+    // SAFETY: test runs single-threaded for this env manipulation
+    unsafe {
+        std::env::set_var("OMNIVORE_RETENTION_FULL", "3");
+        std::env::set_var("OMNIVORE_RETENTION_SUMMARY", "2");
+    }
+
+    let db = test_db().await;
+
+    // Create project
+    db.create_project(&omnivore_core::model::project::CreateProject {
+        id: "retention-test".to_string(),
+        name: "Retention Test".to_string(),
+        description: None,
+        github_repo: None,
+        source_root: None,
+    }).await.unwrap();
+
+    // Insert 7 snapshots (exceeds full=3, summary=2, total=5)
+    for i in 0..7 {
+        let snap = CoverageSnapshot {
+            id: format!("snap-{i}"),
+            project_id: "retention-test".to_string(),
+            commit_sha: Some(format!("abc{i}")),
+            branch: Some("main".to_string()),
+            target: "JvmUnit".to_string(),
+            line_rate: 0.5 + (i as f64 * 0.05),
+            branch_rate: 0.4,
+            lines_covered: 50 + i,
+            lines_total: 100,
+            branches_covered: 40,
+            branches_total: 100,
+            file_count: 10,
+            created_at: Utc::now(),
+            files_json: Some(format!(r#"[{{"path":"file{i}.kt","lineRate":0.5}}]"#)),
+            dependencies_json: None,
+        };
+        db.insert_snapshot(&snap).await.unwrap();
+        db.prune_snapshots("retention-test", "JvmUnit").await.unwrap();
+        // Small delay to ensure ordering by created_at
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Query all remaining snapshots
+    let all = db.get_snapshots_for_project("retention-test", 100).await.unwrap();
+
+    // Should have 5 total (3 full + 2 summary), 2 deleted
+    assert_eq!(all.len(), 5, "Expected 5 snapshots after pruning, got {}", all.len());
+
+    // The 3 newest should have files_json
+    let with_files: Vec<_> = all.iter().filter(|s| s.files_json.is_some()).collect();
+    assert_eq!(with_files.len(), 3, "Expected 3 snapshots with full file data, got {}", with_files.len());
+
+    // The 2 oldest remaining should have files_json = None (summary-only)
+    let without_files: Vec<_> = all.iter().filter(|s| s.files_json.is_none()).collect();
+    assert_eq!(without_files.len(), 2, "Expected 2 summary-only snapshots, got {}", without_files.len());
+
+    // Clean up env vars
+    // SAFETY: test runs single-threaded for this env manipulation
+    unsafe {
+        std::env::remove_var("OMNIVORE_RETENTION_FULL");
+        std::env::remove_var("OMNIVORE_RETENTION_SUMMARY");
+    }
 }
