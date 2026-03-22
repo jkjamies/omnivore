@@ -304,7 +304,6 @@ fn fmt_delta_html(delta: Option<f64>) -> String {
 
 pub struct HotspotFile {
     pub path: String,
-    pub target_label: String,
     pub line_rate: f64,
     pub uncovered_lines: i64,
     pub total_lines: i64,
@@ -366,6 +365,13 @@ impl ProjectsPage {
     }
 }
 
+/// Snapshot option for export modal dropdowns.
+pub struct ExportSnapshotOption {
+    pub id: String,
+    pub commit_sha_short: String,
+    pub date_display: String,
+}
+
 #[derive(Template)]
 #[template(path = "project_detail.html")]
 pub struct ProjectDetailPage {
@@ -374,6 +380,7 @@ pub struct ProjectDetailPage {
     targets: Vec<TargetSnapshot>,
     composite: Option<CompositeSnapshot>,
     has_dependencies: bool,
+    export_snapshots: Vec<ExportSnapshotOption>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -420,7 +427,6 @@ impl ProjectDetailPage {
                 if uncovered > 0 {
                     all.push(HotspotFile {
                         path: f.path.clone(),
-                        target_label: t.label.clone(),
                         line_rate: f.line_rate,
                         uncovered_lines: uncovered,
                         total_lines: total,
@@ -605,12 +611,41 @@ pub async fn project_detail_page(
         .and_then(|s| s.dependencies_json.as_ref())
         .is_some();
 
+    // Build deduplicated snapshot list for export modal
+    let all_snaps = db
+        .get_snapshots_for_project(&project_id, 50)
+        .await
+        .unwrap_or_default();
+    let mut seen_dates = std::collections::HashSet::new();
+    let export_snapshots: Vec<ExportSnapshotOption> = all_snaps
+        .iter()
+        .filter_map(|s| {
+            let date_key = s.created_at.format("%Y-%m-%d %H:%M").to_string();
+            if !seen_dates.insert(date_key) {
+                return None;
+            }
+            let sha_short = s
+                .commit_sha
+                .as_deref()
+                .filter(|sha| !sha.is_empty())
+                .map(|sha| if sha.len() > 7 { &sha[..7] } else { sha })
+                .unwrap_or("")
+                .to_string();
+            Some(ExportSnapshotOption {
+                id: s.id.clone(),
+                commit_sha_short: sha_short,
+                date_display: s.created_at.format("%b %d, %Y %H:%M").to_string(),
+            })
+        })
+        .collect();
+
     let page = ProjectDetailPage {
         project,
         latest,
         targets,
         composite,
         has_dependencies,
+        export_snapshots,
     };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))
@@ -954,3 +989,4 @@ pub async fn dependency_graph_page(
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))
 }
+
