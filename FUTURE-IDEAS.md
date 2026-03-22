@@ -60,8 +60,15 @@ Server-wide retention via env vars, pruned on each ingest:
 
 **Future**: per-project configurable limits (important for enterprise/compliance). Add `retention_full` and `retention_summary` columns to `projects` table, fall back to env var defaults.
 
-### Export (Small)
-Download coverage data as CSV or JSON for custom analysis. One new route serializing existing data.
+### Export Reports (Done — basic; future: richer detail)
+Project-level export at `/projects/{id}/export` with two snapshot pickers (compare any two points in time) and Markdown/JSON format selector. Report includes: overview stats, file distribution by threshold, per-target breakdown with deltas and status. Standalone mode (no comparison) also supported.
+
+**Future enhancements:**
+- Richer statistics: coverage trends over selected time period, package/directory-level aggregates, complexity-weighted coverage
+- Comparative file change summaries: counts of improved/regressed/new files between snapshots
+- Additional formats: PDF, HTML standalone
+- All-projects summary report (once multiple projects exist)
+- Scheduled/automated report generation (e.g., weekly summary emails)
 
 ## Platform
 

@@ -372,6 +372,60 @@ impl Database {
         .await
     }
 
+    /// Get a single snapshot by its ID.
+    pub async fn get_snapshot_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<CoverageSnapshot>, sqlx::Error> {
+        sqlx::query_as!(
+            CoverageSnapshot,
+            r#"SELECT id as "id!: String", project_id,
+                      commit_sha as "commit_sha: String",
+                      branch as "branch: String",
+                      target, line_rate, branch_rate,
+                      lines_covered, lines_total,
+                      branches_covered, branches_total, file_count,
+                      created_at as "created_at!: DateTime<Utc>",
+                      files_json as "files_json: String",
+                      dependencies_json as "dependencies_json: String"
+               FROM coverage_snapshots
+               WHERE id = ?"#,
+            id
+        )
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Get the snapshot for a target closest to a given date.
+    pub async fn get_snapshot_closest_to_date(
+        &self,
+        project_id: &str,
+        target: &str,
+        date: &str,
+    ) -> Result<Option<CoverageSnapshot>, sqlx::Error> {
+        sqlx::query_as!(
+            CoverageSnapshot,
+            r#"SELECT id as "id!: String", project_id,
+                      commit_sha as "commit_sha: String",
+                      branch as "branch: String",
+                      target, line_rate, branch_rate,
+                      lines_covered, lines_total,
+                      branches_covered, branches_total, file_count,
+                      created_at as "created_at!: DateTime<Utc>",
+                      files_json as "files_json: String",
+                      dependencies_json as "dependencies_json: String"
+               FROM coverage_snapshots
+               WHERE project_id = ? AND target = ?
+               ORDER BY ABS(JULIANDAY(created_at) - JULIANDAY(?))
+               LIMIT 1"#,
+            project_id,
+            target,
+            date
+        )
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     /// Get distinct targets that have snapshots for a project.
     pub async fn get_targets_for_project(
         &self,

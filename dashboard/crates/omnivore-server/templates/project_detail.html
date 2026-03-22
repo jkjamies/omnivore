@@ -162,11 +162,12 @@
 </div>
 {% endif %}
 
-{% if has_dependencies %}
-<div style="margin-bottom:16px;">
+<div style="margin-bottom:16px;display:flex;gap:8px;">
+  {% if has_dependencies %}
   <a href="/projects/{{ project.id }}/dependencies" class="btn">View Dependency Graph</a>
+  {% endif %}
+  <a href="/projects/{{ project.id }}/export" class="btn">Export Report</a>
 </div>
-{% endif %}
 
 {# -- Trend chart (all targets overlaid) -- #}
 {% if self.has_trend() %}
