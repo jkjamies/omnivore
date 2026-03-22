@@ -30,6 +30,9 @@ Per-project configurable line and branch coverage thresholds with global default
 ### Badge Endpoint (Done)
 `/badge/{project_id}` — shields.io-style SVG badge for READMEs. Supports `?metric=branch` and `?target=` query params.
 
+### GitHub Action for Upload (Small)
+Reusable composite GitHub Action (`jkjamies/omnivore-upload@v1`) that wraps the `curl` ingest call. Inputs: `server`, `project_id`, `format`, `file`. Automatically pulls commit SHA, branch, and PR number from GitHub context. Requires the repo to be public (or published to Marketplace) for external consumption. Build once the repo goes public.
+
 ### Webhook Notifications (Medium)
 Configurable per-project Slack/Discord/email alerts when coverage drops below threshold or changes by more than X%.
 
@@ -49,6 +52,34 @@ Coverage bars use red→yellow→green gradient with color transitions at thresh
 
 ### Nested File Tree (Done)
 Directory-grouped file breakdown with collapsible folders, path collapsing for single-child directories, and aggregate coverage per directory.
+
+## Scalability
+
+### Relational File/Line Storage (Medium)
+Replace `files_json` TEXT blob with normalized tables (`coverage_files`, `coverage_lines`). Current blob approach works but at scale (1-2M LOC projects, 20-60 merges/day) deserialization and DB size become concerns. Normalized tables enable: per-file queries without parsing the full blob, SQL-level aggregation ("which files dropped?"), proper indexing, and smaller per-query reads. Tradeoff: more complex inserts (batch row inserts vs single blob write). Consider when blob sizes regularly exceed ~20MB or ingest latency becomes noticeable.
+
+### Database Backend Options (Medium)
+SQLite is ideal for the self-hosted model — no external dependencies, zero config, single file backup. At very high ingest volume (hundreds of concurrent CI uploads), the single-writer lock could queue writes. Options:
+- **SQLite (default)** — perfect for self-hosted single-instance deployments, which is the primary model
+- **PostgreSQL (optional)** — for customers who need HA, read replicas, or already have Postgres infrastructure. sqlx already supports both; migration is mostly connection/query layer changes. Could support both via env var selection.
+
+### Distribution & Packaging (Small-Medium)
+Omnivore is self-hosted — each customer runs their own instance on their own infrastructure. Distribution options:
+- **Docker image** — single `docker run` with a volume for the SQLite file. Easiest for most teams.
+- **Static binary** — download and run. No runtime dependencies.
+- **Helm chart** — for Kubernetes-native teams
+- **One-line install script** — `curl | sh` style for quick setup
+
+The self-hosted model means:
+- Zero infrastructure cost for Omnivore (customers provide their own compute)
+- SQLite is a feature, not a limitation — no DB server to manage
+- Each instance is isolated — no multi-tenancy concerns
+- Monetization via licensing, not hosting costs
+
+**Features that would add cost to the customer:**
+- Email digests — requires an SMTP server or email service
+- AI-powered suggestions — per-call API costs (Claude, OpenAI) using the customer's own API key
+- GitHub App — free, but requires a publicly reachable webhook endpoint
 
 ## Data Management
 
@@ -109,3 +140,103 @@ Extend dependency graph extraction beyond Gradle to other ecosystems. Current Gr
 - **Python/pip**: `pipdeptree --json` (low complexity)
 
 Recommended approach: start with platform-specific CLI tools/scripts, later consolidate into a universal `omnivore` CLI binary. The existing `DependencyGraph` data model is already platform-agnostic — just needs different producers.
+
+## New Feature Ideas (Unsorted by Tier)
+
+### Dark/Light Theme Toggle (Small — Free)
+Currently relies on `prefers-color-scheme`. Add an explicit toggle in the header so users can override OS preference. Stored in localStorage, no server change.
+
+### Project Favoriting / Pinning (Small — Free)
+Pin frequently used projects to the top of the dashboard. LocalStorage-based for free tier, server-persisted per-user with auth (Pro).
+
+### Coverage Sparklines on Projects Page (Small — Free)
+Tiny inline trend graph (last 10-20 points) next to each project card on the home page. Gives at-a-glance trend without clicking into a project. Pure SVG, no Chart.js needed.
+
+### Keyboard Navigation (Small — Free)
+Arrow keys to navigate project list, `/` to focus the search filter, `Esc` to clear. Power-user UX at zero cost.
+
+### Ingest History / Activity Log (Small — Free)
+Simple table showing recent ingests: timestamp, project, target, commit SHA, coverage delta. Answers "when was data last uploaded?" without clicking into each project. Useful for debugging CI pipelines.
+
+### Coverage Annotations in GitHub Files (Small-Medium — Pro)
+Use GitHub's Checks API annotations to mark uncovered lines directly in the PR's "Files changed" tab. Developers see coverage without leaving GitHub. Builds on top of GitHub commit status checks.
+
+### Custom Dashboard Widgets (Medium — Pro)
+Let teams configure which stats/charts appear on the home page. Drag-and-drop widget layout. Some teams care about branch coverage, others about trend direction.
+
+### Coverage Trend Alerts (Small — Pro)
+Trigger when coverage trend crosses a threshold — not just on a single ingest, but when the 7-day moving average drops. Smarter than per-ingest notifications, fewer false alarms from one bad commit.
+
+### Project Tags / Labels (Small — Free)
+Tag projects with labels (e.g., "backend", "mobile", "critical"). Filter the projects page by tag. Simple metadata column, no auth needed.
+
+### API Rate Limiting (Small — Pro)
+Rate limit the ingest endpoint per API key. Prevents runaway CI from flooding the instance. Simple token bucket in memory, configurable per key.
+
+### Coverage Trend Embeds (Small — Free)
+`/embed/{project_id}/trend` — an embeddable iframe-friendly trend chart for wikis, Notion, internal docs. SVG or lightweight HTML, no auth required.
+
+### Snapshot Annotations / Notes (Small — Pro)
+Attach notes to specific snapshots: "deployed v2.3", "refactored auth module", "intentional coverage drop — removed deprecated code". Context for why coverage changed.
+
+### Multi-Format Badge Endpoint (Small — Free)
+Extend badge to support additional formats beyond shields.io SVG — JSON endpoint for custom badge rendering, HTML badge for wikis/docs.
+
+### Bulk Project Import (Small — Free)
+Scan a GitHub org or Gradle multi-module project and auto-create projects for each module/repo. Reduces setup friction for large codebases.
+
+### Health Check Dashboard (Small — Free)
+Expand `/api/v1/health` to include: database size, snapshot count, last ingest time, uptime. Useful for monitoring the Omnivore instance itself.
+
+## Monetization
+
+### Freemium Open-Core Model
+
+Self-hosted, free core with paid tiers for advanced features. Free trial period for paid tiers so teams can evaluate before committing.
+
+**Community (Free forever):**
+- Unlimited projects
+- All coverage format ingestion (Omnivore, lcov, llvm-cov, Go, Python)
+- Coverage trends, file trees, hotspots
+- Configurable thresholds (global defaults)
+- Coverage badges for READMEs
+- GitHub Action for CI upload
+- Data retention settings
+- Export reports (single snapshot)
+
+**Pro ($X/year per instance — 30-day free trial):**
+- Everything in Community
+- GitHub OAuth login (admin vs viewer roles)
+- GitHub PR comments on ingest (coverage summary, delta, file breakdown)
+- Configurable thresholds — per-project override
+- Export reports — two-snapshot comparison
+- GitHub commit status checks (pass/fail on PRs)
+- PR coverage gates (block merges when coverage drops)
+- Slack/Discord/webhook notifications
+- Email digests (weekly/monthly summaries)
+- API keys + token-based upload auth
+- Diff coverage (coverage for only changed lines in a PR)
+- AI-powered test suggestions (copy-to-clipboard prompts from hotspots + file views; uses customer's own AI API key, cost is theirs)
+
+**Enterprise ($X/year per instance — 30-day free trial):**
+- Everything in Pro
+- SSO / SAML authentication
+- Audit logs (who changed settings, who uploaded, when)
+- Per-project retention policies
+- Inline AI suggestions (dashboard calls AI API directly, renders inline)
+- PR-level AI test review (AI suggestions in GitHub PR comments)
+- Multi-instance / HA deployment support (Postgres backend)
+- Priority support + SLA
+
+### Licensing Implementation (Small-Medium)
+- License key file checked at startup, controls which tier is active
+- Key encodes: tier, expiration date, instance ID
+- Expired Pro/Enterprise gracefully downgrades to Community (no data loss, features just hide)
+- Free trial: generate a 30-day Pro/Enterprise key from the Omnivore website
+- No phone-home required (enterprise customers dislike it); offline validation via signed keys
+- Dashboard shows current tier + expiration in the settings page
+
+### Competitive Positioning
+- **vs SonarQube**: $15k+/year Enterprise, heavy JVM stack, complex setup → Omnivore: fraction of the cost, Rust-fast, 5-minute setup
+- **vs Codecov/Coveralls**: $10-29/seat/month SaaS, no self-hosted option → Omnivore: flat per-instance pricing, self-hosted, data stays on your infra
+- **vs JaCoCo alone**: Free but no dashboard, no trends, no multi-format, no PR integration → Omnivore: full platform on top

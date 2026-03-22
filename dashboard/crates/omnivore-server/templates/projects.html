@@ -47,9 +47,18 @@
 </div>
 {% endif %}
 
-  <h2 class="section-title">Projects</h2>
+  <div class="projects-header">
+    <h2 class="section-title" style="margin-bottom:0;">Projects</h2>
+    <div class="project-search-wrapper">
+      <input type="text" id="project-search" class="project-search" placeholder="Filter projects..." oninput="filterProjects(this)">
+      <button type="button" class="project-search-clear" onclick="clearProjectFilter()" aria-label="Clear filter">&times;</button>
+    </div>
+  </div>
+  <div id="no-match-msg" class="empty-state" style="display:none;">
+    <p>No projects match your filter.</p>
+  </div>
   {% for item in projects %}
-  <a href="/projects/{{ item.project.id }}" class="card-link">
+  <a href="/projects/{{ item.project.id }}" class="card-link project-entry" data-name="{{ item.project.name|lower }}" data-id="{{ item.project.id|lower }}">
     <div class="card project-card">
       <div class="project-row">
         <div class="project-info">
@@ -59,6 +68,11 @@
           <div style="font-size:13px;color:var(--text-muted);margin-top:2px;">{{ desc }}</div>
           {% endif %}
         </div>
+        {% if !item.sparkline.is_empty() %}
+        <div class="project-sparkline">
+          <svg class="sparkline" viewBox="0 0 240 48" preserveAspectRatio="none" data-values="{{ item.sparkline }}"></svg>
+        </div>
+        {% endif %}
         <div class="project-coverage">
           {% if let Some(snap) = item.latest %}
             {% if item.targets.len() > 1 %}
@@ -90,4 +104,51 @@
   </a>
   {% endfor %}
 {% endif %}
+
+<script>
+// Sparkline rendering
+document.querySelectorAll('.sparkline').forEach(function(svg) {
+  var raw = svg.dataset.values;
+  if (!raw) return;
+  var vals = raw.split(',').map(Number);
+  if (vals.length < 2) return;
+  var w = 240, h = 48, pad = 2;
+  var min = Math.min.apply(null, vals);
+  var max = Math.max.apply(null, vals);
+  var range = max - min || 0.01;
+  var points = vals.map(function(v, i) {
+    var x = pad + (i / (vals.length - 1)) * (w - pad * 2);
+    var y = pad + (1 - (v - min) / range) * (h - pad * 2);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  var line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  line.setAttribute('points', points);
+  line.setAttribute('fill', 'none');
+  line.setAttribute('stroke', 'var(--accent)');
+  line.setAttribute('stroke-width', '1.25');
+  line.setAttribute('stroke-linecap', 'round');
+  line.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(line);
+});
+
+function filterProjects(input) {
+  var query = input.value.toLowerCase().trim();
+  var entries = document.querySelectorAll('.project-entry');
+  var clearBtn = document.querySelector('.project-search-clear');
+  var visible = 0;
+  clearBtn.style.display = query ? 'block' : 'none';
+  entries.forEach(function(el) {
+    var match = !query || el.dataset.name.indexOf(query) !== -1 || el.dataset.id.indexOf(query) !== -1;
+    el.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  document.getElementById('no-match-msg').style.display = (query && visible === 0) ? '' : 'none';
+}
+function clearProjectFilter() {
+  var input = document.getElementById('project-search');
+  input.value = '';
+  filterProjects(input);
+  input.focus();
+}
+</script>
 {% endblock %}

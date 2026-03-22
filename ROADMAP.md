@@ -22,8 +22,8 @@ High-value features to make Omnivore production-ready for startups, enterprises,
 ## Developer Experience
 
 - [x] **Project delete** — form POST with browser confirmation dialog to remove projects from the dashboard
-- [ ] **GitHub Action for CI** — a reusable GitHub Action wrapper that runs tests + uploads in one step
-- [ ] **Search/filter on projects page** — client-side JS filter as the project list grows
+- [x] **GitHub Action for CI** — composite action at `.github/actions/upload-coverage/` that wraps the ingest curl; auto-detects commit, branch, PR from GitHub context
+- [x] **Search/filter on projects page** — client-side JS filter as the project list grows
 
 ## Data & Reporting
 

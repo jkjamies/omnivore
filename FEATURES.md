@@ -1,0 +1,55 @@
+# Feature Tiers
+
+Tracks which features exist in the project and which tier they belong to. Features marked **Built** are implemented; **Planned** are not yet built.
+
+## Community (Free)
+
+| Feature | Status |
+|---|---|
+| Multi-format coverage ingestion (Omnivore, lcov, llvm-cov, Go, Python) | Built |
+| Coverage trends with Chart.js graphs | Built |
+| Nested file tree with directory-level aggregates | Built |
+| File-level coverage with source code view (via GitHub API) | Built |
+| Uncovered code hotspots (sortable columns) | Built |
+| Historical deltas (line + branch, project + file level) | Built |
+| Gradient coverage bars (red → yellow → green at thresholds) | Built |
+| Configurable thresholds — global defaults | Built |
+| Dashboard home summary (total projects, avg coverage, pass/warn/fail counts) | Built |
+| Search/filter on projects page | Built |
+| Data retention settings (full + summary snapshots, global) | Built |
+| Export reports (Markdown/JSON, single snapshot) | Built |
+| Coverage badges for READMEs (`/badge/{project_id}`) | Built |
+| GitHub Action for CI upload (`.github/actions/upload-coverage/`) | Built |
+| Project delete with confirmation | Built |
+| Dependency graph visualization (D3.js, Gradle projects) | Built |
+| Multi-target support (unit + instrumented shown separately + composite) | Built |
+| Compose-aware filtering (auto-detected, zero-cost on non-Compose) | Built |
+| Unlimited projects | Built |
+
+## Pro
+
+| Feature | Status |
+|---|---|
+| GitHub PR comments on ingest (coverage summary, delta, file breakdown) | Built |
+| Configurable thresholds — per-project override | Built |
+| Export reports — two-snapshot comparison | Built |
+| GitHub OAuth login (admin vs viewer roles) | Planned |
+| GitHub commit status checks (pass/fail on PRs via Checks API) | Planned |
+| PR coverage gates (block merges when coverage drops) | Planned |
+| Slack/Discord/webhook notifications | Planned |
+| Email digests (weekly/monthly summaries) | Planned |
+| API keys + token-based upload auth | Planned |
+| Diff coverage (coverage for only changed lines in a PR) | Planned |
+| AI-powered test suggestions (copy-to-clipboard prompts; customer's own API key) | Planned |
+
+## Enterprise
+
+| Feature | Status |
+|---|---|
+| SSO / SAML authentication | Planned |
+| Audit logs (settings changes, uploads, timestamps) | Planned |
+| Per-project retention policies | Planned |
+| Inline AI suggestions (dashboard calls AI API, renders inline) | Planned |
+| PR-level AI test review (AI suggestions in GitHub PR comments) | Planned |
+| Multi-instance / HA deployment support (Postgres backend) | Planned |
+| Priority support + SLA | Planned |
