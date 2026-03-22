@@ -24,8 +24,8 @@ Track which test method covers which lines. Enables "which tests should I run fo
 ### GitHub Check Runs (Small-Medium)
 Post pass/fail status checks via GitHub Checks API on ingest. Pairs with configurable thresholds to enable branch protection enforcement.
 
-### Coverage Thresholds / Gates (Small-Medium)
-Configurable per-project pass/fail thresholds. Check on ingest, return pass/fail status. Could block PRs when combined with GitHub Check Runs.
+### Coverage Thresholds / Gates (Done — basic; future: ingest-time enforcement)
+Per-project configurable line and branch coverage thresholds with global defaults. Global settings page (`/settings`) and per-project override via modal on project detail page. Thresholds drive status badges, coverage bar colors, and badge endpoint colors. Projects inherit global defaults unless overridden (NULL = inherit). Future: check thresholds on ingest and return pass/fail status, block PRs when combined with GitHub Check Runs.
 
 ### Badge Endpoint (Done)
 `/badge/{project_id}` — shields.io-style SVG badge for READMEs. Supports `?metric=branch` and `?target=` query params.

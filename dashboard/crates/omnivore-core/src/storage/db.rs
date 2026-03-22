@@ -1,5 +1,6 @@
 use crate::model::coverage::CoverageSnapshot;
 use crate::model::project::{CreateProject, Project};
+use crate::model::settings::GlobalSettings;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
@@ -120,6 +121,74 @@ impl Database {
                 .await?;
         }
 
+        // Migration: add threshold columns to projects if missing
+        let has_line_threshold: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'line_threshold'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_line_threshold {
+            sqlx::query("ALTER TABLE projects ADD COLUMN line_threshold REAL")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("ALTER TABLE projects ADD COLUMN branch_threshold REAL")
+                .execute(&self.pool)
+                .await?;
+        }
+
+        // Migration: add warning threshold columns to projects if missing
+        let has_line_warn_threshold: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'line_warn_threshold'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_line_warn_threshold {
+            sqlx::query("ALTER TABLE projects ADD COLUMN line_warn_threshold REAL")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("ALTER TABLE projects ADD COLUMN branch_warn_threshold REAL")
+                .execute(&self.pool)
+                .await?;
+        }
+
+        // Global settings table (single row, id=1)
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                default_line_threshold REAL NOT NULL DEFAULT 0.8,
+                default_branch_threshold REAL NOT NULL DEFAULT 0.8,
+                default_line_warn_threshold REAL NOT NULL DEFAULT 0.5,
+                default_branch_warn_threshold REAL NOT NULL DEFAULT 0.5
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("INSERT OR IGNORE INTO settings (id) VALUES (1)")
+            .execute(&self.pool)
+            .await?;
+
+        // Migration: add warning threshold columns to settings if missing
+        let has_settings_warn: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('settings') WHERE name = 'default_line_warn_threshold'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_settings_warn {
+            sqlx::query("ALTER TABLE settings ADD COLUMN default_line_warn_threshold REAL NOT NULL DEFAULT 0.5")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("ALTER TABLE settings ADD COLUMN default_branch_warn_threshold REAL NOT NULL DEFAULT 0.5")
+                .execute(&self.pool)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -128,14 +197,18 @@ impl Database {
     pub async fn create_project(&self, input: &CreateProject) -> Result<Project, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO projects (id, name, description, github_repo, source_root, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO projects (id, name, description, github_repo, source_root, line_threshold, branch_threshold, line_warn_threshold, branch_warn_threshold, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&input.id)
         .bind(&input.name)
         .bind(&input.description)
         .bind(&input.github_repo)
         .bind(&input.source_root)
+        .bind(input.line_threshold)
+        .bind(input.branch_threshold)
+        .bind(input.line_warn_threshold)
+        .bind(input.branch_warn_threshold)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -153,6 +226,10 @@ impl Database {
                       description as "description: String",
                       github_repo as "github_repo: String",
                       source_root as "source_root: String",
+                      line_threshold as "line_threshold: f64",
+                      branch_threshold as "branch_threshold: f64",
+                      line_warn_threshold as "line_warn_threshold: f64",
+                      branch_warn_threshold as "branch_warn_threshold: f64",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects WHERE id = ?"#,
@@ -169,6 +246,10 @@ impl Database {
                       description as "description: String",
                       github_repo as "github_repo: String",
                       source_root as "source_root: String",
+                      line_threshold as "line_threshold: f64",
+                      branch_threshold as "branch_threshold: f64",
+                      line_warn_threshold as "line_warn_threshold: f64",
+                      branch_warn_threshold as "branch_warn_threshold: f64",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects ORDER BY name"#
@@ -191,6 +272,67 @@ impl Database {
         )
         .bind(github_repo)
         .bind(source_root)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_project(id).await
+    }
+
+    // -- Global settings --
+
+    pub async fn get_global_settings(&self) -> Result<GlobalSettings, sqlx::Error> {
+        let row = sqlx::query_as::<_, (f64, f64, f64, f64)>(
+            "SELECT default_line_threshold, default_branch_threshold, default_line_warn_threshold, default_branch_warn_threshold FROM settings WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row
+            .map(|(lt, bt, lwt, bwt)| GlobalSettings {
+                default_line_threshold: lt,
+                default_branch_threshold: bt,
+                default_line_warn_threshold: lwt,
+                default_branch_warn_threshold: bwt,
+            })
+            .unwrap_or_default())
+    }
+
+    pub async fn update_global_settings(
+        &self,
+        settings: &GlobalSettings,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE settings SET default_line_threshold = ?, default_branch_threshold = ?, default_line_warn_threshold = ?, default_branch_warn_threshold = ? WHERE id = 1",
+        )
+        .bind(settings.default_line_threshold)
+        .bind(settings.default_branch_threshold)
+        .bind(settings.default_line_warn_threshold)
+        .bind(settings.default_branch_warn_threshold)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // -- Project thresholds --
+
+    pub async fn update_project_thresholds(
+        &self,
+        id: &str,
+        line_threshold: Option<f64>,
+        branch_threshold: Option<f64>,
+        line_warn_threshold: Option<f64>,
+        branch_warn_threshold: Option<f64>,
+    ) -> Result<Option<Project>, sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE projects SET line_threshold = ?, branch_threshold = ?, line_warn_threshold = ?, branch_warn_threshold = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(line_threshold)
+        .bind(branch_threshold)
+        .bind(line_warn_threshold)
+        .bind(branch_warn_threshold)
         .bind(&now)
         .bind(id)
         .execute(&self.pool)
@@ -500,6 +642,10 @@ impl Database {
                 description: None,
                 github_repo: None,
                 source_root: None,
+                line_threshold: None,
+                branch_threshold: None,
+                line_warn_threshold: None,
+                branch_warn_threshold: None,
             };
             self.create_project(&input).await?;
         }

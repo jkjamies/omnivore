@@ -1,0 +1,276 @@
+use askama::Template;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::Html;
+use omnivore_core::model::coverage::FileCoverage;
+use omnivore_core::model::project::Project;
+use omnivore_core::storage::Database;
+
+use super::{fmt_delta_html, fmt_pct_val, html_escape, rate_color_val};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineStatus {
+    Covered,
+    Uncovered,
+    None,
+}
+
+pub struct LineRow {
+    pub number: i32,
+    pub hits: i64,
+    pub status: LineStatus,
+    pub css_class: &'static str,
+    pub code: String,
+}
+
+#[derive(Template)]
+#[template(path = "file_coverage.html")]
+struct FileCoveragePage {
+    project: Project,
+    file_path: String,
+    file: FileCoverage,
+    line_delta: Option<f64>,
+    branch_delta: Option<f64>,
+}
+
+impl FileCoveragePage {
+    fn fmt_pct(&self, rate: &f64) -> String {
+        fmt_pct_val(*rate)
+    }
+    fn rate_color(&self, rate: &f64) -> &'static str {
+        rate_color_val(*rate)
+    }
+    fn fmt_delta(&self, delta: &Option<f64>) -> String {
+        fmt_delta_html(*delta)
+    }
+    fn covered_count(&self) -> usize {
+        self.file.lines.iter().filter(|l| l.hit_count > 0).count()
+    }
+    fn total_count(&self) -> usize {
+        self.file.lines.len()
+    }
+    fn line_rows(&self) -> Vec<LineRow> {
+        let mut hit_map = std::collections::HashMap::new();
+        for line in &self.file.lines {
+            hit_map.insert(line.line_number, line.hit_count);
+        }
+
+        let source_lines: Vec<&str> = self.file.source_content
+            .as_deref()
+            .map(|s| s.lines().collect())
+            .unwrap_or_default();
+
+        let max_line = if !source_lines.is_empty() {
+            source_lines.len() as i32
+        } else if self.file.lines.is_empty() {
+            return vec![];
+        } else {
+            self.file.lines.iter().map(|l| l.line_number).max().unwrap_or(1)
+        };
+
+        (1..=max_line)
+            .map(|n| {
+                let code = source_lines
+                    .get((n - 1) as usize)
+                    .unwrap_or(&"")
+                    .to_string();
+
+                if let Some(&hits) = hit_map.get(&n) {
+                    if hits > 0 {
+                        LineRow { number: n, hits, status: LineStatus::Covered, css_class: "line-covered", code }
+                    } else {
+                        LineRow { number: n, hits: 0, status: LineStatus::Uncovered, css_class: "line-uncovered", code }
+                    }
+                } else {
+                    LineRow { number: n, hits: 0, status: LineStatus::None, css_class: "", code }
+                }
+            })
+            .collect()
+    }
+}
+
+fn build_source_candidates(source_root: Option<&str>, file_path: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let src_dirs = ["src/main/java", "src/main/kotlin"];
+
+    if let Some(root) = source_root {
+        let root = root.trim_end_matches('/');
+
+        if src_dirs.iter().any(|d| root.contains(d)) {
+            candidates.push(format!("{}/{}", root, file_path));
+        }
+
+        let segments: Vec<&str> = file_path.split('/').collect();
+        let mut seen = std::collections::HashSet::new();
+        for seg in &segments {
+            if seen.insert(*seg) {
+                for src_dir in &src_dirs {
+                    candidates.push(format!("{}/{}/{}/{}", root, seg, src_dir, file_path));
+                }
+            }
+        }
+
+        candidates.push(format!("{}/{}", root, file_path));
+    }
+
+    candidates.push(file_path.to_string());
+    candidates
+}
+
+pub async fn file_coverage_page(
+    State(db): State<Database>,
+    Path((project_id, file_path)): Path<(String, String)>,
+) -> Result<Html<String>, StatusCode> {
+    let project = db
+        .get_project(&project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let (file, line_delta, branch_delta) = find_file_with_delta(&db, &project_id, &file_path).await?;
+
+    let page = FileCoveragePage { project, file_path, file, line_delta, branch_delta };
+    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Html(html))
+}
+
+pub async fn file_source_fragment(
+    State(db): State<Database>,
+    Path((project_id, file_path)): Path<(String, String)>,
+) -> Result<Html<String>, StatusCode> {
+    let project = db
+        .get_project(&project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let mut file = find_file_across_targets(&db, &project_id, &file_path).await?;
+
+    if let Some(repo) = &project.github_repo {
+        let commit_ref = "";
+        if let Ok(Some(cached)) = db.get_cached_source(repo, &file_path, commit_ref).await {
+            file.source_content = Some(cached);
+        } else {
+            let token = std::env::var("GITHUB_TOKEN").ok();
+            let candidates = build_source_candidates(
+                project.source_root.as_deref(),
+                &file_path,
+            );
+
+            for candidate in &candidates {
+                let content = omnivore_core::github::source::fetch_source(
+                    repo,
+                    candidate,
+                    None,
+                    token.as_deref(),
+                )
+                .await;
+                if let Some(src) = content {
+                    let _ = db.cache_source(repo, &file_path, commit_ref, &src).await;
+                    file.source_content = Some(src);
+                    break;
+                }
+            }
+        }
+    }
+
+    let page = FileCoveragePage {
+        project,
+        file_path,
+        file,
+        line_delta: None,
+        branch_delta: None,
+    };
+    let rows = page.line_rows();
+    let mut html = String::new();
+    for line in &rows {
+        html.push_str(&format!(
+            r#"<tr class="{}"><td class="line-gutter">{}</td><td class="line-num">{}</td><td class="line-hits">{}</td><td class="line-code"><pre>{}</pre></td></tr>"#,
+            line.css_class,
+            match line.status {
+                LineStatus::Covered => r#"<span class="gutter-mark gutter-covered"></span>"#,
+                LineStatus::Uncovered => r#"<span class="gutter-mark gutter-uncovered"></span>"#,
+                LineStatus::None => "",
+            },
+            line.number,
+            match line.status {
+                LineStatus::Covered => format!(r#"<span class="hit-badge hit-covered">{}x</span>"#, line.hits),
+                LineStatus::Uncovered => r#"<span class="hit-badge hit-uncovered">0x</span>"#.to_string(),
+                LineStatus::None => String::new(),
+            },
+            html_escape(&line.code),
+        ));
+    }
+    Ok(Html(html))
+}
+
+async fn find_file_across_targets(
+    db: &Database,
+    project_id: &str,
+    file_path: &str,
+) -> Result<FileCoverage, StatusCode> {
+    let target_names = db
+        .get_targets_for_project(project_id)
+        .await
+        .unwrap_or_default();
+
+    for tname in &target_names {
+        if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(project_id, tname).await {
+            let files: Vec<FileCoverage> = snap
+                .files_json
+                .as_ref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+            if let Some(f) = files.into_iter().find(|f| f.path == file_path) {
+                return Ok(f);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+async fn find_file_with_delta(
+    db: &Database,
+    project_id: &str,
+    file_path: &str,
+) -> Result<(FileCoverage, Option<f64>, Option<f64>), StatusCode> {
+    let target_names = db
+        .get_targets_for_project(project_id)
+        .await
+        .unwrap_or_default();
+
+    for tname in &target_names {
+        let snaps = db
+            .get_snapshots_for_project_by_target(project_id, tname, 2)
+            .await
+            .unwrap_or_default();
+
+        if let Some(snap) = snaps.first() {
+            let files: Vec<FileCoverage> = snap
+                .files_json
+                .as_ref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+            if let Some(f) = files.into_iter().find(|f| f.path == file_path) {
+                let (line_delta, branch_delta) = if let Some(prev) = snaps.get(1) {
+                    let prev_files: Vec<FileCoverage> = prev
+                        .files_json
+                        .as_ref()
+                        .and_then(|json| serde_json::from_str(json).ok())
+                        .unwrap_or_default();
+                    if let Some(pf) = prev_files.iter().find(|pf| pf.path == file_path) {
+                        (Some(f.line_rate - pf.line_rate), Some(f.branch_rate - pf.branch_rate))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+                return Ok((f, line_delta, branch_delta));
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}

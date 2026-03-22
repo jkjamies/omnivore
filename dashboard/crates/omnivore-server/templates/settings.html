@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — Omnivore{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">Projects</a> / Settings
+</div>
+
+<div class="page-header">
+  <h1>Settings</h1>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Coverage Thresholds</h2>
+  </div>
+  <p class="settings-hint">Default thresholds applied to all projects unless overridden at the project level.</p>
+  <form class="settings-form" method="post" action="/settings">
+    <div class="settings-field">
+      <label>Line coverage</label>
+      <div class="settings-threshold-row">
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-warn">Warning</span>
+          <div class="settings-input-group">
+            <input type="number" id="default_line_warn_threshold" name="default_line_warn_threshold"
+                   value="{{ self.line_warn_pct() }}" min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-good">Good</span>
+          <div class="settings-input-group">
+            <input type="number" id="default_line_threshold" name="default_line_threshold"
+                   value="{{ self.line_pct() }}" min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-field-hint">Below warning = bad (red), warning–good = yellow, at or above good = green</div>
+    </div>
+    <div class="settings-field">
+      <label>Branch coverage</label>
+      <div class="settings-threshold-row">
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-warn">Warning</span>
+          <div class="settings-input-group">
+            <input type="number" id="default_branch_warn_threshold" name="default_branch_warn_threshold"
+                   value="{{ self.branch_warn_pct() }}" min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-good">Good</span>
+          <div class="settings-input-group">
+            <input type="number" id="default_branch_threshold" name="default_branch_threshold"
+                   value="{{ self.branch_pct() }}" min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-field-hint">Below warning = bad (red), warning–good = yellow, at or above good = green</div>
+    </div>
+    <button type="submit" class="btn" style="margin-top:8px;">Save</button>
+  </form>
+</div>
+{% endblock %}
