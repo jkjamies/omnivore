@@ -22,6 +22,14 @@ pub fn build_router(db: Database) -> Router {
             routing::get(routes::pages::dependency_graph_page),
         )
         .route(
+            "/projects/{project_id}/export",
+            routing::get(routes::export::export_page),
+        )
+        .route(
+            "/projects/{project_id}/export/report",
+            routing::get(routes::export::export_report),
+        )
+        .route(
             "/projects/{project_id}/files/{*file_path}",
             routing::get(routes::pages::file_coverage_page),
         )

@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Export — {{ project.name }} — Omnivore{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">Projects</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / Export
+</div>
+
+<div class="page-header">
+  <h1>Export Coverage Report</h1>
+  <p>Generate a downloadable coverage report for {{ project.name }}</p>
+</div>
+
+<div class="card">
+  {% if snapshots.is_empty() %}
+  <div class="empty-state">
+    <h3>No snapshots</h3>
+    <p>Upload coverage data before generating a report.</p>
+  </div>
+  {% else %}
+  <form class="export-form" action="/projects/{{ project.id }}/export/report" method="get">
+    <div class="export-field">
+      <label for="current">Snapshot</label>
+      <select id="current" name="current" onchange="updateBaseline()">
+        <option value="">Latest</option>
+        {% for snap in snapshots %}
+        <option value="{{ snap.id }}" data-idx="{{ loop.index0 }}">
+          {{ snap.date_display }}{% if !snap.commit_sha_short.is_empty() %} — {{ snap.commit_sha_short }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="export-field">
+      <label for="baseline">Compare against</label>
+      <select id="baseline" name="baseline">
+        <option value="">None (standalone report)</option>
+        {% for snap in snapshots %}
+        <option value="{{ snap.id }}" data-idx="{{ loop.index0 }}">
+          {{ snap.date_display }}{% if !snap.commit_sha_short.is_empty() %} — {{ snap.commit_sha_short }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <div class="export-hint">Only snapshots before the selected snapshot are shown</div>
+    </div>
+
+    <div class="export-field">
+      <label for="format">Format</label>
+      <select id="format" name="format">
+        <option value="md">Markdown</option>
+        <option value="json">JSON</option>
+      </select>
+    </div>
+
+    <button type="submit" class="btn" style="margin-top:8px;">Download Report</button>
+  </form>
+
+  <script>
+  function updateBaseline() {
+    var currentSel = document.getElementById('current');
+    var baselineSel = document.getElementById('baseline');
+    var currentIdx = currentSel.selectedIndex;
+    // "Latest" is index 0 in current dropdown, which maps to data-idx 0 (first snapshot)
+    // Actual snapshot options start at index 1 in the current dropdown
+    var currentDataIdx = currentIdx === 0 ? 0 : parseInt(currentSel.options[currentIdx].getAttribute('data-idx'));
+
+    // Reset baseline selection
+    var prevValue = baselineSel.value;
+    baselineSel.value = '';
+
+    // Show/hide baseline options — only show those with data-idx > currentDataIdx
+    // (higher index = older snapshot since list is sorted newest first)
+    for (var i = 1; i < baselineSel.options.length; i++) {
+      var opt = baselineSel.options[i];
+      var idx = parseInt(opt.getAttribute('data-idx'));
+      if (idx > currentDataIdx) {
+        opt.style.display = '';
+        opt.disabled = false;
+      } else {
+        opt.style.display = 'none';
+        opt.disabled = true;
+        if (opt.value === prevValue) {
+          baselineSel.value = '';
+        }
+      }
+    }
+
+    // Restore previous selection if still valid
+    if (prevValue && !baselineSel.querySelector('option[value="' + prevValue + '"]:disabled')) {
+      baselineSel.value = prevValue;
+    }
+  }
+
+  // Run on load to set initial state
+  updateBaseline();
+  </script>
+  {% endif %}
+</div>
+{% endblock %}

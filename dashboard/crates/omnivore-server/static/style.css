@@ -619,6 +619,44 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   color: var(--text-muted);
 }
 
+/* Export form */
+.export-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 480px;
+}
+.export-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.export-field label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.export-field select {
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+}
+.export-field select:focus {
+  border-color: var(--accent);
+}
+.export-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 @media (max-width: 768px) {
   .stats { grid-template-columns: 1fr 1fr; }
   .stat-value { font-size: 22px; }
