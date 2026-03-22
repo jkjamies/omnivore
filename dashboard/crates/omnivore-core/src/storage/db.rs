@@ -189,6 +189,23 @@ impl Database {
                 .await?;
         }
 
+        // Migration: add retention columns to settings if missing
+        let has_retention: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('settings') WHERE name = 'retention_full'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_retention {
+            sqlx::query("ALTER TABLE settings ADD COLUMN retention_full INTEGER NOT NULL DEFAULT 30")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("ALTER TABLE settings ADD COLUMN retention_summary INTEGER NOT NULL DEFAULT 60")
+                .execute(&self.pool)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -296,18 +313,20 @@ impl Database {
     // -- Global settings --
 
     pub async fn get_global_settings(&self) -> Result<GlobalSettings, sqlx::Error> {
-        let row = sqlx::query_as::<_, (f64, f64, f64, f64)>(
-            "SELECT default_line_threshold, default_branch_threshold, default_line_warn_threshold, default_branch_warn_threshold FROM settings WHERE id = 1",
+        let row = sqlx::query_as::<_, (f64, f64, f64, f64, i64, i64)>(
+            "SELECT default_line_threshold, default_branch_threshold, default_line_warn_threshold, default_branch_warn_threshold, retention_full, retention_summary FROM settings WHERE id = 1",
         )
         .fetch_optional(&self.pool)
         .await?;
 
         Ok(row
-            .map(|(lt, bt, lwt, bwt)| GlobalSettings {
+            .map(|(lt, bt, lwt, bwt, rf, rs)| GlobalSettings {
                 default_line_threshold: lt,
                 default_branch_threshold: bt,
                 default_line_warn_threshold: lwt,
                 default_branch_warn_threshold: bwt,
+                retention_full: rf,
+                retention_summary: rs,
             })
             .unwrap_or_default())
     }
@@ -317,12 +336,14 @@ impl Database {
         settings: &GlobalSettings,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE settings SET default_line_threshold = ?, default_branch_threshold = ?, default_line_warn_threshold = ?, default_branch_warn_threshold = ? WHERE id = 1",
+            "UPDATE settings SET default_line_threshold = ?, default_branch_threshold = ?, default_line_warn_threshold = ?, default_branch_warn_threshold = ?, retention_full = ?, retention_summary = ? WHERE id = 1",
         )
         .bind(settings.default_line_threshold)
         .bind(settings.default_branch_threshold)
         .bind(settings.default_line_warn_threshold)
         .bind(settings.default_branch_warn_threshold)
+        .bind(settings.retention_full)
+        .bind(settings.retention_summary)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -681,14 +702,9 @@ impl Database {
         project_id: &str,
         target: &str,
     ) -> Result<(), sqlx::Error> {
-        let retention_full: i64 = std::env::var("OMNIVORE_RETENTION_FULL")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(30);
-        let retention_summary: i64 = std::env::var("OMNIVORE_RETENTION_SUMMARY")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(60);
+        let settings = self.get_global_settings().await.unwrap_or_default();
+        let retention_full = settings.retention_full;
+        let retention_summary = settings.retention_summary;
         let retention_total = retention_full + retention_summary;
 
         // Strip files_json from snapshots beyond the full retention limit

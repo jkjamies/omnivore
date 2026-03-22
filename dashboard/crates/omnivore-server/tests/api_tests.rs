@@ -545,14 +545,14 @@ async fn retention_prunes_old_snapshots() {
     use omnivore_core::model::coverage::CoverageSnapshot;
     use chrono::Utc;
 
-    // Set low retention limits for testing
-    // SAFETY: test runs single-threaded for this env manipulation
-    unsafe {
-        std::env::set_var("OMNIVORE_RETENTION_FULL", "3");
-        std::env::set_var("OMNIVORE_RETENTION_SUMMARY", "2");
-    }
-
     let db = test_db().await;
+
+    // Set low retention limits for testing via DB
+    use omnivore_core::model::settings::GlobalSettings;
+    let mut settings = db.get_global_settings().await.unwrap();
+    settings.retention_full = 3;
+    settings.retention_summary = 2;
+    db.update_global_settings(&settings).await.unwrap();
 
     // Create project
     db.create_project(&omnivore_core::model::project::CreateProject {

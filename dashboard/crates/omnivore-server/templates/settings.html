@@ -4,19 +4,21 @@
 
 {% block content %}
 <div class="breadcrumb">
-  <a href="/">Projects</a> / Settings
+  <a href="/">Dashboard</a> / Settings
 </div>
 
 <div class="page-header">
   <h1>Settings</h1>
 </div>
 
+<form method="post" action="/settings">
+
 <div class="card">
   <div class="card-header">
     <h2>Coverage Thresholds</h2>
   </div>
   <p class="settings-hint">Default thresholds applied to all projects unless overridden at the project level.</p>
-  <form class="settings-form" method="post" action="/settings">
+  <div class="settings-form">
     <div class="settings-field">
       <label>Line coverage</label>
       <div class="settings-threshold-row">
@@ -37,7 +39,7 @@
           </div>
         </div>
       </div>
-      <div class="settings-field-hint">Below warning = bad (red), warning–good = yellow, at or above good = green</div>
+      <div class="settings-field-hint">Below warning = bad (red), warning to good = yellow, at or above good = green</div>
     </div>
     <div class="settings-field">
       <label>Branch coverage</label>
@@ -59,9 +61,39 @@
           </div>
         </div>
       </div>
-      <div class="settings-field-hint">Below warning = bad (red), warning–good = yellow, at or above good = green</div>
+      <div class="settings-field-hint">Below warning = bad (red), warning to good = yellow, at or above good = green</div>
     </div>
-    <button type="submit" class="btn" style="margin-top:8px;">Save</button>
-  </form>
+  </div>
 </div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Data Retention</h2>
+  </div>
+  <p class="settings-hint">Controls how many snapshots are kept per project and target. Older data is pruned automatically on each ingest.</p>
+  <div class="settings-form">
+    <div class="settings-field">
+      <label for="retention_full">Full snapshots</label>
+      <div class="settings-input-group">
+        <input type="number" id="retention_full" name="retention_full"
+               value="{{ self.retention_full() }}" min="1" step="1">
+        <span class="settings-unit">snapshots</span>
+      </div>
+      <div class="settings-field-hint">Newest N snapshots per project+target keep full file-level data</div>
+    </div>
+    <div class="settings-field">
+      <label for="retention_summary">Summary snapshots</label>
+      <div class="settings-input-group">
+        <input type="number" id="retention_summary" name="retention_summary"
+               value="{{ self.retention_summary() }}" min="0" step="1">
+        <span class="settings-unit">snapshots</span>
+      </div>
+      <div class="settings-field-hint">Next N snapshots kept as summary-only (no file detail) for trend charts. Beyond this, snapshots are deleted.</div>
+    </div>
+  </div>
+</div>
+
+<button type="submit" class="btn" style="margin-top:4px;">Save</button>
+
+</form>
 {% endblock %}
