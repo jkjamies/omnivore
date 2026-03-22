@@ -26,8 +26,16 @@ pub fn build_router(db: Database) -> Router {
             routing::get(routes::export::export_report),
         )
         .route(
+            "/projects/{project_id}/settings",
+            routing::get(routes::settings::project_settings_page),
+        )
+        .route(
             "/projects/{project_id}/thresholds",
             routing::post(routes::settings::save_project_thresholds),
+        )
+        .route(
+            "/projects/{project_id}/delete",
+            routing::post(routes::settings::delete_project),
         )
         // Settings
         .route("/settings", routing::get(routes::settings::settings_page))

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.name }} Settings — Omnivore{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">Projects</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / Settings
+</div>
+
+<div class="page-header">
+  <h1>{{ project.name }} Settings</h1>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Coverage Thresholds</h2>
+  </div>
+  <p class="settings-hint">Override global defaults for this project. Leave empty to inherit.</p>
+  <form class="settings-form" method="post" action="/projects/{{ project.id }}/thresholds">
+    <div class="settings-field">
+      <label>Line coverage</label>
+      <div class="settings-threshold-row">
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-warn">Warning</span>
+          <div class="settings-input-group">
+            <input type="number" id="line_warn_threshold" name="line_warn_threshold"
+                   value="{{ self.project_line_warn_pct() }}"
+                   placeholder="{{ self.global_line_warn_pct() }}"
+                   min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-good">Good</span>
+          <div class="settings-input-group">
+            <input type="number" id="line_threshold" name="line_threshold"
+                   value="{{ self.project_line_pct() }}"
+                   placeholder="{{ self.global_line_pct() }}"
+                   min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-field-hint">Global defaults: {{ self.global_line_warn_pct() }}% / {{ self.global_line_pct() }}%</div>
+    </div>
+    <div class="settings-field">
+      <label>Branch coverage</label>
+      <div class="settings-threshold-row">
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-warn">Warning</span>
+          <div class="settings-input-group">
+            <input type="number" id="branch_warn_threshold" name="branch_warn_threshold"
+                   value="{{ self.project_branch_warn_pct() }}"
+                   placeholder="{{ self.global_branch_warn_pct() }}"
+                   min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+        <div class="settings-threshold-pair">
+          <span class="threshold-label threshold-good">Good</span>
+          <div class="settings-input-group">
+            <input type="number" id="branch_threshold" name="branch_threshold"
+                   value="{{ self.project_branch_pct() }}"
+                   placeholder="{{ self.global_branch_pct() }}"
+                   min="0" max="100" step="1">
+            <span class="settings-unit">%</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-field-hint">Global defaults: {{ self.global_branch_warn_pct() }}% / {{ self.global_branch_pct() }}%</div>
+    </div>
+    <button type="submit" class="btn" style="margin-top:8px;">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Coverage Badge</h2>
+  </div>
+  <div class="badge-preview">
+    <img src="/badge/{{ project.id }}" alt="coverage badge">
+  </div>
+  <div class="badge-snippets">
+    <div class="badge-snippet">
+      <label>Markdown</label>
+      <div class="badge-code-row">
+        <code class="badge-code" id="badgeMd">![coverage]({{ self.badge_url() }})</code>
+        <button type="button" class="btn-copy" onclick="copyBadge('badgeMd')" title="Copy to clipboard">&#x2398;</button>
+      </div>
+    </div>
+    <div class="badge-snippet">
+      <label>HTML</label>
+      <div class="badge-code-row">
+        <code class="badge-code" id="badgeHtml">&lt;img src="{{ self.badge_url() }}" alt="coverage"&gt;</code>
+        <button type="button" class="btn-copy" onclick="copyBadge('badgeHtml')" title="Copy to clipboard">&#x2398;</button>
+      </div>
+    </div>
+    <div class="badge-snippet">
+      <label>URL</label>
+      <div class="badge-code-row">
+        <code class="badge-code" id="badgeUrl">{{ self.badge_url() }}</code>
+        <button type="button" class="btn-copy" onclick="copyBadge('badgeUrl')" title="Copy to clipboard">&#x2398;</button>
+      </div>
+    </div>
+  </div>
+  <div class="settings-field-hint" style="margin-top:12px;">
+    Append <code>?metric=branch</code> for branch coverage or <code>?target=JvmUnit</code> to filter by target.
+  </div>
+</div>
+
+<div class="card card-danger">
+  <div class="card-header">
+    <h2>Danger Zone</h2>
+  </div>
+  <p class="settings-hint">Permanently delete this project and all its coverage data. This cannot be undone.</p>
+  <form method="post" action="/projects/{{ project.id }}/delete" onsubmit="return confirmDelete()">
+    <button type="submit" class="btn btn-danger">Delete Project</button>
+  </form>
+</div>
+
+<script>
+function copyBadge(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var text = el.textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = el.parentElement.querySelector('.btn-copy');
+    if (btn) { var orig = btn.innerHTML; btn.innerHTML = '&#x2713;'; setTimeout(function(){ btn.innerHTML = orig; }, 1500); }
+  });
+}
+function confirmDelete() {
+  return confirm('Are you sure you want to delete "{{ project.name }}"? This will permanently remove the project and all its coverage data.');
+}
+</script>
+{% endblock %}

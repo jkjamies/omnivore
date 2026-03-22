@@ -4,8 +4,7 @@
 
 {% block content %}
 <div class="page-header">
-  <h1>Projects</h1>
-  <p>Coverage overview for all registered projects</p>
+  <h1>Dashboard</h1>
 </div>
 
 {% if projects.is_empty() %}
@@ -14,6 +13,41 @@
   <p>Ingest a coverage report to get started. Run your tests with the Omnivore plugin, then POST the report to <code>/api/v1/ingest/coverage</code>.</p>
 </div>
 {% else %}
+
+{% if let Some(s) = summary %}
+<h2 class="section-title">Overview</h2>
+<div class="summary-bar">
+  <div class="summary-stat">
+    <div class="stat-value">{{ s.total_projects }}</div>
+    <div class="stat-label">Projects</div>
+  </div>
+  <div class="summary-stat summary-stat-wide">
+    <div class="stat-value">{{ self.fmt_pct(s.avg_line_rate) }}%</div>
+    <div class="stat-label">Avg Line Coverage</div>
+    <div class="coverage-bar" style="margin-top:6px;">
+      <div class="coverage-bar-fill" style="width:{{ self.fmt_pct(s.avg_line_rate) }}%;--rate:{{ s.avg_line_rate }};"></div>
+    </div>
+  </div>
+  <div class="summary-stat">
+    <div class="stat-value" style="color:var(--green)">{{ s.passing_count }}</div>
+    <div class="stat-label">Passing</div>
+  </div>
+  {% if s.warning_count > 0 %}
+  <div class="summary-stat">
+    <div class="stat-value" style="color:var(--yellow)">{{ s.warning_count }}</div>
+    <div class="stat-label">Warning</div>
+  </div>
+  {% endif %}
+  {% if s.failing_count > 0 %}
+  <div class="summary-stat">
+    <div class="stat-value" style="color:var(--red)">{{ s.failing_count }}</div>
+    <div class="stat-label">Below Threshold</div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+  <h2 class="section-title">Projects</h2>
   {% for item in projects %}
   <a href="/projects/{{ item.project.id }}" class="card-link">
     <div class="card project-card">

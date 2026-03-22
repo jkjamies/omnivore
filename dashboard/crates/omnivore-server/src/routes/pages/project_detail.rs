@@ -31,10 +31,6 @@ pub struct ProjectDetailPage {
     branch_threshold: f64,
     line_warn_threshold: f64,
     branch_warn_threshold: f64,
-    global_line_threshold: f64,
-    global_branch_threshold: f64,
-    global_line_warn_threshold: f64,
-    global_branch_warn_threshold: f64,
 }
 
 impl ProjectDetailPage {
@@ -43,30 +39,6 @@ impl ProjectDetailPage {
     }
     fn rate_color(&self, rate: &f64) -> &'static str {
         rate_color_with_threshold(*rate, self.line_threshold, self.line_warn_threshold)
-    }
-    fn project_line_pct(&self) -> String {
-        self.project.line_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
-    }
-    fn project_branch_pct(&self) -> String {
-        self.project.branch_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
-    }
-    fn project_line_warn_pct(&self) -> String {
-        self.project.line_warn_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
-    }
-    fn project_branch_warn_pct(&self) -> String {
-        self.project.branch_warn_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
-    }
-    fn global_line_pct(&self) -> String {
-        format!("{:.0}", self.global_line_threshold * 100.0)
-    }
-    fn global_branch_pct(&self) -> String {
-        format!("{:.0}", self.global_branch_threshold * 100.0)
-    }
-    fn global_line_warn_pct(&self) -> String {
-        format!("{:.0}", self.global_line_warn_threshold * 100.0)
-    }
-    fn global_branch_warn_pct(&self) -> String {
-        format!("{:.0}", self.global_branch_warn_threshold * 100.0)
     }
     fn fmt_delta(&self, delta: &Option<f64>) -> String {
         fmt_delta_html(*delta)
@@ -291,10 +263,6 @@ pub async fn project_detail_page(
         branch_threshold,
         line_warn_threshold,
         branch_warn_threshold,
-        global_line_threshold: global_settings.default_line_threshold,
-        global_branch_threshold: global_settings.default_branch_threshold,
-        global_line_warn_threshold: global_settings.default_line_warn_threshold,
-        global_branch_warn_threshold: global_settings.default_branch_warn_threshold,
     };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))

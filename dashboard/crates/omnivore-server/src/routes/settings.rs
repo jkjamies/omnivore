@@ -3,6 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, Redirect};
 use axum::Form;
+use omnivore_core::model::project::Project;
 use omnivore_core::model::settings::GlobalSettings;
 use omnivore_core::storage::Database;
 use serde::Deserialize;
@@ -101,6 +102,64 @@ pub async fn save_settings(
     Ok(Redirect::to("/settings"))
 }
 
+// -- Project settings page --
+
+#[derive(Template)]
+#[template(path = "project_settings.html")]
+struct ProjectSettingsPage {
+    project: Project,
+    global_settings: GlobalSettings,
+}
+
+impl ProjectSettingsPage {
+    fn project_line_pct(&self) -> String {
+        self.project.line_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
+    }
+    fn project_branch_pct(&self) -> String {
+        self.project.branch_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
+    }
+    fn project_line_warn_pct(&self) -> String {
+        self.project.line_warn_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
+    }
+    fn project_branch_warn_pct(&self) -> String {
+        self.project.branch_warn_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
+    }
+    fn global_line_pct(&self) -> String {
+        format!("{:.0}", self.global_settings.default_line_threshold * 100.0)
+    }
+    fn global_branch_pct(&self) -> String {
+        format!("{:.0}", self.global_settings.default_branch_threshold * 100.0)
+    }
+    fn global_line_warn_pct(&self) -> String {
+        format!("{:.0}", self.global_settings.default_line_warn_threshold * 100.0)
+    }
+    fn global_branch_warn_pct(&self) -> String {
+        format!("{:.0}", self.global_settings.default_branch_warn_threshold * 100.0)
+    }
+    fn badge_url(&self) -> String {
+        let base = std::env::var("OMNIVORE_DASHBOARD_URL")
+            .unwrap_or_else(|_| String::new());
+        format!("{}/badge/{}", base, self.project.id)
+    }
+}
+
+pub async fn project_settings_page(
+    State(db): State<Database>,
+    Path(project_id): Path<String>,
+) -> Result<Html<String>, StatusCode> {
+    let project = db
+        .get_project(&project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let global_settings = db.get_global_settings().await.unwrap_or_default();
+
+    let page = ProjectSettingsPage { project, global_settings };
+    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Html(html))
+}
+
 // -- Project threshold update --
 
 #[derive(Deserialize)]
@@ -149,5 +208,18 @@ pub async fn save_project_thresholds(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Redirect::to(&format!("/projects/{}", project_id)))
+    Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
+}
+
+// -- Project delete --
+
+pub async fn delete_project(
+    State(db): State<Database>,
+    Path(project_id): Path<String>,
+) -> Result<Redirect, StatusCode> {
+    db.delete_project(&project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Redirect::to("/"))
 }

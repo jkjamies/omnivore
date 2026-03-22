@@ -280,6 +280,19 @@ impl Database {
         self.get_project(id).await
     }
 
+    pub async fn delete_project(&self, id: &str) -> Result<(), sqlx::Error> {
+        // Delete snapshots first (foreign key), then source cache, then project
+        sqlx::query("DELETE FROM coverage_snapshots WHERE project_id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("DELETE FROM projects WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     // -- Global settings --
 
     pub async fn get_global_settings(&self) -> Result<GlobalSettings, sqlx::Error> {
