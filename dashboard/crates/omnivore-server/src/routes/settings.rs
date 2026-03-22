@@ -29,6 +29,12 @@ impl SettingsPage {
     fn branch_warn_pct(&self) -> String {
         format!("{:.0}", self.settings.default_branch_warn_threshold * 100.0)
     }
+    fn retention_full(&self) -> String {
+        self.settings.retention_full.to_string()
+    }
+    fn retention_summary(&self) -> String {
+        self.settings.retention_summary.to_string()
+    }
 }
 
 pub async fn settings_page(
@@ -50,6 +56,8 @@ pub struct SaveSettingsForm {
     default_branch_threshold: Option<String>,
     default_line_warn_threshold: Option<String>,
     default_branch_warn_threshold: Option<String>,
+    retention_full: Option<String>,
+    retention_summary: Option<String>,
 }
 
 pub async fn save_settings(
@@ -88,11 +96,29 @@ pub async fn save_settings(
         .map(|v| (v / 100.0).clamp(0.0, 1.0))
         .unwrap_or(0.5);
 
+    let retention_full = form
+        .retention_full
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<i64>().ok())
+        .map(|v| v.max(1))
+        .unwrap_or(30);
+
+    let retention_summary = form
+        .retention_summary
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<i64>().ok())
+        .map(|v| v.max(0))
+        .unwrap_or(60);
+
     let settings = GlobalSettings {
         default_line_threshold: line,
         default_branch_threshold: branch,
         default_line_warn_threshold: line_warn,
         default_branch_warn_threshold: branch_warn,
+        retention_full,
+        retention_summary,
     };
 
     db.update_global_settings(&settings)

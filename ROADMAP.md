@@ -17,7 +17,7 @@ High-value features to make Omnivore production-ready for startups, enterprises,
 
 - [x] **Dashboard home summary** — aggregate stats across all projects: total projects, average coverage, how many are below threshold
 - [x] **Copy badge markdown button** — "copy to clipboard" button on the project settings page for README badge embedding
-- [ ] **Retention policy in settings** — expose snapshot retention config in the settings UI (keep last N per target)
+- [x] **Retention policy in settings** — configurable full and summary snapshot retention in the global settings UI; replaces env vars
 
 ## Developer Experience
 
