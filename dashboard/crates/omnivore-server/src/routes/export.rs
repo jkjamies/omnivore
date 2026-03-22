@@ -1,72 +1,8 @@
-use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
-use omnivore_core::model::project::Project;
+use axum::response::{IntoResponse, Response};
 use omnivore_core::storage::Database;
 use serde::Deserialize;
-
-// -- Export page --
-
-/// A deduplicated snapshot option for the picker dropdowns (one per point in time).
-pub struct SnapshotOption {
-    pub id: String,
-    pub commit_sha_short: String,
-    pub date_display: String,
-}
-
-#[derive(Template)]
-#[template(path = "export.html")]
-pub struct ExportPage {
-    project: Project,
-    snapshots: Vec<SnapshotOption>,
-}
-
-pub async fn export_page(
-    State(db): State<Database>,
-    Path(project_id): Path<String>,
-) -> Result<Html<String>, StatusCode> {
-    let project = db
-        .get_project(&project_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let all_snaps = db
-        .get_snapshots_for_project(&project_id, 50)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // Deduplicate by date (minute granularity) so each point in time appears once
-    let mut seen_dates = std::collections::HashSet::new();
-    let snapshots: Vec<SnapshotOption> = all_snaps
-        .iter()
-        .filter_map(|s| {
-            let date_key = s.created_at.format("%Y-%m-%d %H:%M").to_string();
-            if !seen_dates.insert(date_key) {
-                return None;
-            }
-            let sha_short = s
-                .commit_sha
-                .as_deref()
-                .filter(|sha| !sha.is_empty())
-                .map(|sha| if sha.len() > 7 { &sha[..7] } else { sha })
-                .unwrap_or("")
-                .to_string();
-            Some(SnapshotOption {
-                id: s.id.clone(),
-                commit_sha_short: sha_short,
-                date_display: s.created_at.format("%b %d, %Y %H:%M").to_string(),
-            })
-        })
-        .collect();
-
-    let page = ExportPage { project, snapshots };
-    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Html(html))
-}
-
-// -- Report download --
 
 #[derive(Deserialize)]
 pub struct ReportQuery {
@@ -94,20 +30,21 @@ pub async fn export_report(
     // Get "current" snapshots — either from the user-picked snapshot or latest per target
     let mut current_snapshots = Vec::new();
     if let Some(current_id) = &params.current {
-        if let Ok(Some(picked)) = db.get_snapshot_by_id(current_id).await {
-            let picked_date = picked.created_at.to_rfc3339();
-            for tname in &target_names {
-                if let Ok(Some(snap)) = db
-                    .get_snapshot_closest_to_date(&project_id, tname, &picked_date)
-                    .await
-                {
-                    current_snapshots.push(snap);
+        if !current_id.is_empty() {
+            if let Ok(Some(picked)) = db.get_snapshot_by_id(current_id).await {
+                let picked_date = picked.created_at.to_rfc3339();
+                for tname in &target_names {
+                    if let Ok(Some(snap)) = db
+                        .get_snapshot_closest_to_date(&project_id, tname, &picked_date)
+                        .await
+                    {
+                        current_snapshots.push(snap);
+                    }
                 }
             }
         }
     }
     if current_snapshots.is_empty() {
-        // Fallback: latest per target
         for tname in &target_names {
             if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(&project_id, tname).await {
                 current_snapshots.push(snap);
@@ -132,14 +69,12 @@ pub async fn export_report(
                     .await
                     .ok()
                     .flatten();
-                // Don't use the same snapshot as both current and baseline
                 let snap = snap.filter(|s| current_snapshots.iter().all(|c| c.id != s.id));
                 baseline_snapshots.push(snap);
             }
         }
     }
 
-    // If no baselines resolved, pass empty options (report will omit comparison)
     if baseline_snapshots.is_empty() {
         baseline_snapshots = current_snapshots.iter().map(|_| None).collect();
     }
@@ -186,16 +121,5 @@ pub async fn export_report(
             )
                 .into_response())
         }
-    }
-}
-
-fn target_label(target: &str) -> &str {
-    match target {
-        "JVM_UNIT" | "JvmUnit" => "Unit Tests",
-        "ANDROID_INSTRUMENTED" | "AndroidInstrumented" => "Instrumented Tests",
-        "IOS_UNIT" | "IosUnit" => "iOS Unit Tests",
-        "KOTLIN_NATIVE" | "KotlinNative" => "Kotlin/Native Tests",
-        "COMPOSITE" | "Composite" => "Composite",
-        other => other,
     }
 }

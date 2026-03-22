@@ -166,8 +166,58 @@
   {% if has_dependencies %}
   <a href="/projects/{{ project.id }}/dependencies" class="btn">View Dependency Graph</a>
   {% endif %}
-  <a href="/projects/{{ project.id }}/export" class="btn">Export Report</a>
+  {% if !export_snapshots.is_empty() %}
+  <button type="button" class="btn" onclick="document.getElementById('exportModal').style.display='flex'">Export Report</button>
+  {% endif %}
 </div>
+
+{# -- Export modal -- #}
+{% if !export_snapshots.is_empty() %}
+<div id="exportModal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Export Coverage Report</h2>
+      <button type="button" class="modal-close" onclick="document.getElementById('exportModal').style.display='none'">&times;</button>
+    </div>
+    <form class="export-form" action="/projects/{{ project.id }}/export/report" method="get">
+      <div class="export-field">
+        <label for="current">Snapshot</label>
+        <select id="current" name="current" onchange="updateBaseline()">
+          <option value="">Latest</option>
+          {% for snap in export_snapshots %}
+          <option value="{{ snap.id }}" data-idx="{{ loop.index0 }}">
+            {{ snap.date_display }}{% if !snap.commit_sha_short.is_empty() %} — {{ snap.commit_sha_short }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="export-field">
+        <label for="baseline">Compare against</label>
+        <select id="baseline" name="baseline">
+          <option value="">None (standalone report)</option>
+          {% for snap in export_snapshots %}
+          <option value="{{ snap.id }}" data-idx="{{ loop.index0 }}">
+            {{ snap.date_display }}{% if !snap.commit_sha_short.is_empty() %} — {{ snap.commit_sha_short }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        <div class="export-hint">Only snapshots before the selected snapshot are shown</div>
+      </div>
+
+      <div class="export-field">
+        <label for="format">Format</label>
+        <select id="format" name="format">
+          <option value="md">Markdown</option>
+          <option value="json">JSON</option>
+        </select>
+      </div>
+
+      <button type="submit" class="btn" style="margin-top:8px;">Download Report</button>
+    </form>
+  </div>
+</div>
+{% endif %}
 
 {# -- Trend chart (all targets overlaid) -- #}
 {% if self.has_trend() %}
@@ -189,6 +239,42 @@
 {% endif %}
 
 <script>
+// Close any open modal on Escape key
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    var modals = document.querySelectorAll('.modal-overlay');
+    for (var i = 0; i < modals.length; i++) {
+      if (modals[i].style.display !== 'none') modals[i].style.display = 'none';
+    }
+  }
+});
+
+// Export modal: filter baseline options based on selected snapshot
+function updateBaseline() {
+  var currentSel = document.getElementById('current');
+  var baselineSel = document.getElementById('baseline');
+  if (!currentSel || !baselineSel) return;
+  var currentIdx = currentSel.selectedIndex;
+  var currentDataIdx = currentIdx === 0 ? 0 : parseInt(currentSel.options[currentIdx].getAttribute('data-idx'));
+  var prevValue = baselineSel.value;
+  baselineSel.value = '';
+  for (var i = 1; i < baselineSel.options.length; i++) {
+    var opt = baselineSel.options[i];
+    var idx = parseInt(opt.getAttribute('data-idx'));
+    if (idx > currentDataIdx) {
+      opt.style.display = '';
+      opt.disabled = false;
+    } else {
+      opt.style.display = 'none';
+      opt.disabled = true;
+    }
+  }
+  if (prevValue && baselineSel.querySelector('option[value="' + prevValue + '"]:not(:disabled)')) {
+    baselineSel.value = prevValue;
+  }
+}
+document.addEventListener('DOMContentLoaded', updateBaseline);
+
 function toggleDir(row, dirId) {
   var arrow = row.querySelector('.tree-arrow');
   var isOpen = arrow.classList.contains('open');
