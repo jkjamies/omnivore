@@ -719,6 +719,93 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   color: var(--text-muted);
 }
 
+/* Settings */
+.settings-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 480px;
+}
+.settings-threshold-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.settings-threshold-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.threshold-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.threshold-warn { color: var(--yellow); }
+.threshold-good { color: var(--green); }
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.settings-input-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-input-group input {
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  width: 100px;
+}
+.settings-input-group input:focus {
+  border-color: var(--accent);
+}
+.settings-unit {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.settings-field-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Project settings gear */
+.settings-gear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.1s, color 0.1s;
+  vertical-align: middle;
+  margin-left: 8px;
+}
+.settings-gear:hover {
+  color: var(--text);
+  background: var(--bg-hover, rgba(128,128,128,0.1));
+}
+
 @media (max-width: 768px) {
   .stats { grid-template-columns: 1fr 1fr; }
   .stat-value { font-size: 22px; }

@@ -25,16 +25,24 @@ pub async fn badge(
         db.get_latest_snapshot(&project_id).await.ok().flatten()
     };
 
+    // Resolve effective thresholds for badge colors
+    let project = db.get_project(&project_id).await.ok().flatten();
+    let global = db.get_global_settings().await.unwrap_or_default();
+    let line_thresh = project.as_ref().and_then(|p| p.line_threshold).unwrap_or(global.default_line_threshold);
+    let branch_thresh = project.as_ref().and_then(|p| p.branch_threshold).unwrap_or(global.default_branch_threshold);
+    let line_warn = project.as_ref().and_then(|p| p.line_warn_threshold).unwrap_or(global.default_line_warn_threshold);
+    let branch_warn = project.as_ref().and_then(|p| p.branch_warn_threshold).unwrap_or(global.default_branch_warn_threshold);
+
     let (label, pct, color) = match snapshot {
         Some(snap) => {
-            let (label, rate) = match metric {
-                "branch" => ("branch coverage", snap.branch_rate),
-                _ => ("coverage", snap.line_rate),
+            let (label, rate, threshold, warn) = match metric {
+                "branch" => ("branch coverage", snap.branch_rate, branch_thresh, branch_warn),
+                _ => ("coverage", snap.line_rate, line_thresh, line_warn),
             };
             let pct = format!("{:.1}%", rate * 100.0);
-            let color = if rate >= 0.8 {
+            let color = if rate >= threshold {
                 "#2ecc71"
-            } else if rate >= 0.5 {
+            } else if rate >= warn {
                 "#f39c12"
             } else {
                 "#e74c3c"

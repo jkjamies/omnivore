@@ -26,6 +26,13 @@ pub fn build_router(db: Database) -> Router {
             routing::get(routes::export::export_report),
         )
         .route(
+            "/projects/{project_id}/thresholds",
+            routing::post(routes::settings::save_project_thresholds),
+        )
+        // Settings
+        .route("/settings", routing::get(routes::settings::settings_page))
+        .route("/settings", routing::post(routes::settings::save_settings))
+        .route(
             "/projects/{project_id}/files/{*file_path}",
             routing::get(routes::pages::file_coverage_page),
         )

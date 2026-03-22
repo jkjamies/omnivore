@@ -561,6 +561,10 @@ async fn retention_prunes_old_snapshots() {
         description: None,
         github_repo: None,
         source_root: None,
+        line_threshold: None,
+        branch_threshold: None,
+        line_warn_threshold: None,
+        branch_warn_threshold: None,
     }).await.unwrap();
 
     // Insert 7 snapshots (exceeds full=3, summary=2, total=5)
