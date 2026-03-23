@@ -146,7 +146,7 @@ pub fn parse(json: &str, meta: &LlvmCovMeta) -> Result<(OmnivoreReport, Coverage
             name: project_name,
             commit_sha: meta.commit_sha.clone(),
             branch: meta.branch.clone(),
-            target: CoverageTarget::JvmUnit, // Default — caller can override
+            target: CoverageTarget::RustLlvmCov,
         },
         coverage: CoverageSummary {
             line_rate,

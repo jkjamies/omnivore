@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}System Health — Omnivore{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">Dashboard</a> / System Health
+</div>
+
+<div class="page-header">
+  <h1>System Health</h1>
+</div>
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-value">{{ status }}</div>
+    <div class="stat-label">Status</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ version }}</div>
+    <div class="stat-label">Version</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ uptime }}</div>
+    <div class="stat-label">Uptime</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ db_size }}</div>
+    <div class="stat-label">Database Size</div>
+  </div>
+</div>
+
+<div class="stats" style="margin-top: 4px;">
+  <div class="stat-card">
+    <div class="stat-value">{{ project_count }}</div>
+    <div class="stat-label">Projects</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ snapshot_count }}</div>
+    <div class="stat-label">Snapshots</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ last_ingest }}</div>
+    <div class="stat-label">Last Ingest</div>
+  </div>
+</div>
+{% endblock %}

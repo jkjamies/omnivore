@@ -75,6 +75,24 @@
 
 <div class="card">
   <div class="card-header">
+    <h2>Tags</h2>
+  </div>
+  <p class="settings-hint">Comma-separated labels for organizing projects (e.g., backend, mobile, critical).</p>
+  <form class="settings-form" method="post" action="/projects/{{ project.id }}/tags">
+    <div class="settings-field">
+      <div class="settings-input-group" style="max-width:400px;">
+        <input type="text" id="tags" name="tags"
+               value="{{ self.project_tags() }}"
+               placeholder="e.g., backend, mobile, critical"
+               style="flex:1;">
+      </div>
+    </div>
+    <button type="submit" class="btn" style="margin-top:8px;">Save Tags</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">
     <h2>Coverage Badge</h2>
   </div>
   <div class="badge-preview">

@@ -1,11 +1,14 @@
 use omnivore_core::storage::Database;
-use omnivore_server::build_router;
+use omnivore_server::{build_router, init_uptime};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load .env file if present (not required)
     let _ = dotenvy::dotenv();
+
+    // Track server start time
+    init_uptime();
 
     // Logging
     tracing_subscriber::fmt()

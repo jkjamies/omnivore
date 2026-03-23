@@ -24,6 +24,13 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Dependency graph visualization (D3.js, Gradle projects) | Built |
 | Multi-target support (unit + instrumented shown separately + composite) | Built |
 | Compose-aware filtering (auto-detected, zero-cost on non-Compose) | Built |
+| Coverage sparklines on projects page | Built |
+| Project favoriting / pinning (per-browser via localStorage) | Built |
+| Project tags / labels | Built |
+| Keyboard shortcuts (/ to search, Escape to clear) | Built |
+| System health dashboard (uptime, DB size, snapshot count, last ingest) | Built |
+| Dark/light theme toggle | Built |
+| Ingest history / activity log (home + project pages) | Built |
 | Unlimited projects | Built |
 
 ## Pro
@@ -33,6 +40,7 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | GitHub PR comments on ingest (coverage summary, delta, file breakdown) | Built |
 | Configurable thresholds — per-project override | Built |
 | Export reports — two-snapshot comparison | Built |
+| Project favoriting / pinning (server-persisted per-user) | Planned |
 | GitHub OAuth login (admin vs viewer roles) | Planned |
 | GitHub commit status checks (pass/fail on PRs via Checks API) | Planned |
 | PR coverage gates (block merges when coverage drops) | Planned |

@@ -66,6 +66,10 @@ fn target_label(target: &str) -> &str {
         "IOS_UNIT" | "IosUnit" => "iOS Unit Tests",
         "KOTLIN_NATIVE" | "KotlinNative" => "Kotlin/Native Tests",
         "COMPOSITE" | "Composite" => "Composite",
+        "RUST_LLVM_COV" | "RustLlvmCov" => "Rust (llvm-cov)",
+        "GO_COVER" | "GoCover" => "Go",
+        "PYTHON_COVERAGE" | "PythonCoverage" => "Python",
+        "LCOV" | "Lcov" => "lcov",
         other => other,
     }
 }

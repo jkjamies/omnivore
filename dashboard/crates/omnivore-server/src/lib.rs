@@ -1,4 +1,6 @@
-mod routes;
+pub mod routes;
+
+pub use routes::health::init_uptime;
 
 use axum::{routing, Router};
 use omnivore_core::storage::Database;
@@ -34,9 +36,15 @@ pub fn build_router(db: Database) -> Router {
             routing::post(routes::settings::save_project_thresholds),
         )
         .route(
+            "/projects/{project_id}/tags",
+            routing::post(routes::settings::save_project_tags),
+        )
+        .route(
             "/projects/{project_id}/delete",
             routing::post(routes::settings::delete_project),
         )
+        // Health page
+        .route("/health", routing::get(routes::pages::health_page))
         // Settings
         .route("/settings", routing::get(routes::settings::settings_page))
         .route("/settings", routing::post(routes::settings::save_settings))

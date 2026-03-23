@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use omnivore_core::model::coverage::CoverageSnapshot;
 use omnivore_core::model::project::Project;
-use omnivore_core::storage::Database;
+use omnivore_core::storage::{ActivityEntry, Database};
 
 use super::{
     compute_composite, fmt_delta_html, fmt_pct_val, html_escape, rate_color_with_threshold,
@@ -31,6 +31,7 @@ pub struct ProjectDetailPage {
     branch_threshold: f64,
     line_warn_threshold: f64,
     branch_warn_threshold: f64,
+    activity: Vec<ActivityEntry>,
 }
 
 impl ProjectDetailPage {
@@ -80,6 +81,16 @@ impl ProjectDetailPage {
             .then(a.line_rate.partial_cmp(&b.line_rate).unwrap_or(std::cmp::Ordering::Equal)));
         all.truncate(15);
         all
+    }
+    fn fmt_activity_time(&self, dt: &chrono::DateTime<chrono::Utc>) -> String {
+        dt.format("%b %d, %Y %H:%M").to_string()
+    }
+    fn activity_short_sha(&self, sha: &Option<String>) -> String {
+        sha.as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| if s.len() > 7 { &s[..7] } else { s })
+            .unwrap_or("—")
+            .to_string()
     }
     fn has_hotspots(&self) -> bool {
         self.targets.iter().any(|t| t.files.iter().any(|f| {
@@ -252,6 +263,8 @@ pub async fn project_detail_page(
         .branch_warn_threshold
         .unwrap_or(global_settings.default_branch_warn_threshold);
 
+    let activity = db.get_project_activity(&project_id, 15).await.unwrap_or_default();
+
     let page = ProjectDetailPage {
         project,
         latest,
@@ -263,6 +276,7 @@ pub async fn project_detail_page(
         branch_threshold,
         line_warn_threshold,
         branch_warn_threshold,
+        activity,
     };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))

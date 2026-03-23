@@ -154,7 +154,7 @@ pub fn parse(input: &str, meta: &GoCoverprofileMeta) -> Result<(OmnivoreReport, 
             name: project_name,
             commit_sha: meta.commit_sha.clone(),
             branch: meta.branch.clone(),
-            target: CoverageTarget::JvmUnit, // Default — caller can override
+            target: CoverageTarget::GoCover,
         },
         coverage: CoverageSummary {
             line_rate,

@@ -206,6 +206,20 @@ impl Database {
                 .await?;
         }
 
+        // Migration: add tags column to projects if missing
+        let has_tags: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'tags'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_tags {
+            sqlx::query("ALTER TABLE projects ADD COLUMN tags TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -247,6 +261,7 @@ impl Database {
                       branch_threshold as "branch_threshold: f64",
                       line_warn_threshold as "line_warn_threshold: f64",
                       branch_warn_threshold as "branch_warn_threshold: f64",
+                      tags as "tags: String",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects WHERE id = ?"#,
@@ -267,6 +282,7 @@ impl Database {
                       branch_threshold as "branch_threshold: f64",
                       line_warn_threshold as "line_warn_threshold: f64",
                       branch_warn_threshold as "branch_warn_threshold: f64",
+                      tags as "tags: String",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects ORDER BY name"#
@@ -373,6 +389,70 @@ impl Database {
         .await?;
 
         self.get_project(id).await
+    }
+
+    pub async fn update_project_tags(
+        &self,
+        id: &str,
+        tags: Option<&str>,
+    ) -> Result<Option<Project>, sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE projects SET tags = ?, updated_at = ? WHERE id = ?")
+            .bind(tags)
+            .bind(&now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        self.get_project(id).await
+    }
+
+    /// Get recent ingest activity across all projects.
+    pub async fn get_recent_activity(&self, limit: i64) -> Result<Vec<ActivityEntry>, sqlx::Error> {
+        sqlx::query_as!(
+            ActivityEntry,
+            r#"SELECT s.created_at as "created_at!: DateTime<Utc>",
+                      s.project_id as "project_id!: String",
+                      p.name as "project_name!: String",
+                      s.target as "target!: String",
+                      s.commit_sha as "commit_sha: String",
+                      s.line_rate as "line_rate!: f64",
+                      s.branch_rate as "branch_rate!: f64",
+                      s.lines_covered as "lines_covered!: i64",
+                      s.lines_total as "lines_total!: i64"
+               FROM coverage_snapshots s
+               JOIN projects p ON s.project_id = p.id
+               ORDER BY s.created_at DESC
+               LIMIT ?"#,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Get recent ingest activity for a specific project.
+    pub async fn get_project_activity(&self, project_id: &str, limit: i64) -> Result<Vec<ActivityEntry>, sqlx::Error> {
+        sqlx::query_as!(
+            ActivityEntry,
+            r#"SELECT s.created_at as "created_at!: DateTime<Utc>",
+                      s.project_id as "project_id!: String",
+                      p.name as "project_name!: String",
+                      s.target as "target!: String",
+                      s.commit_sha as "commit_sha: String",
+                      s.line_rate as "line_rate!: f64",
+                      s.branch_rate as "branch_rate!: f64",
+                      s.lines_covered as "lines_covered!: i64",
+                      s.lines_total as "lines_total!: i64"
+               FROM coverage_snapshots s
+               JOIN projects p ON s.project_id = p.id
+               WHERE s.project_id = ?
+               ORDER BY s.created_at DESC
+               LIMIT ?"#,
+            project_id,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 
     // -- Coverage snapshots --
@@ -741,4 +821,56 @@ impl Database {
 
         Ok(())
     }
+
+    /// Get system health stats: project count, snapshot count, DB size, last ingest time.
+    pub async fn get_health_stats(&self) -> Result<HealthStats, sqlx::Error> {
+        let project_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projects")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let snapshot_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM coverage_snapshots")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let last_ingest: Option<String> = sqlx::query_scalar(
+            "SELECT created_at FROM coverage_snapshots ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        // Get DB file size via PRAGMA
+        let db_page_count: i64 = sqlx::query_scalar("PRAGMA page_count")
+            .fetch_one(&self.pool)
+            .await?;
+        let db_page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+            .fetch_one(&self.pool)
+            .await?;
+        let db_size_bytes = db_page_count * db_page_size;
+
+        Ok(HealthStats {
+            project_count,
+            snapshot_count,
+            last_ingest,
+            db_size_bytes,
+        })
+    }
+}
+
+pub struct ActivityEntry {
+    pub created_at: DateTime<Utc>,
+    pub project_id: String,
+    pub project_name: String,
+    pub target: String,
+    pub commit_sha: Option<String>,
+    pub line_rate: f64,
+    pub branch_rate: f64,
+    pub lines_covered: i64,
+    pub lines_total: i64,
+}
+
+pub struct HealthStats {
+    pub project_count: i64,
+    pub snapshot_count: i64,
+    pub last_ingest: Option<String>,
+    pub db_size_bytes: i64,
 }

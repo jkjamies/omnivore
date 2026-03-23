@@ -33,6 +33,10 @@ pub enum CoverageTarget {
     IosUnit,
     KotlinNative,
     Composite,
+    RustLlvmCov,
+    GoCover,
+    PythonCoverage,
+    Lcov,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

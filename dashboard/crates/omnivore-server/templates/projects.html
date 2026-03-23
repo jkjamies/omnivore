@@ -54,16 +54,28 @@
       <button type="button" class="project-search-clear" onclick="clearProjectFilter()" aria-label="Clear filter">&times;</button>
     </div>
   </div>
+  <div id="tag-filter-bar" class="tag-filter-bar" style="display:none;"></div>
   <div id="no-match-msg" class="empty-state" style="display:none;">
     <p>No projects match your filter.</p>
   </div>
+  <div id="project-list">
   {% for item in projects %}
-  <a href="/projects/{{ item.project.id }}" class="card-link project-entry" data-name="{{ item.project.name|lower }}" data-id="{{ item.project.id|lower }}">
+  <a href="/projects/{{ item.project.id }}" class="card-link project-entry" data-name="{{ item.project.name|lower }}" data-id="{{ item.project.id|lower }}" data-tags="{{ item.project.tags.as_deref().unwrap_or_default()|lower }}">
     <div class="card project-card">
       <div class="project-row">
+        <button class="pin-btn" data-project="{{ item.project.id }}" onclick="togglePin(event, this)" aria-label="Pin project"></button>
         <div class="project-info">
           <div class="project-name">{{ item.project.name }}</div>
           <div class="project-id">{{ item.project.id }}</div>
+          {% if let Some(tags) = item.project.tags %}
+          {% if !tags.is_empty() %}
+          <div class="project-tags">
+            {% for tag in tags.split(", ") %}
+            <span class="tag-pill">{{ tag }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% endif %}
           {% if let Some(desc) = item.project.description %}
           <div style="font-size:13px;color:var(--text-muted);margin-top:2px;">{{ desc }}</div>
           {% endif %}
@@ -103,9 +115,77 @@
     </div>
   </a>
   {% endfor %}
+  </div>
+
+  {% if !activity.is_empty() %}
+  <h2 class="section-title" style="margin-top:32px;">Recent Activity</h2>
+  <div class="card">
+    <table class="activity-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Project</th>
+          <th>Target</th>
+          <th>Commit</th>
+          <th>Line Coverage</th>
+          <th>Lines</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in activity %}
+        <tr>
+          <td class="activity-time">{{ self.fmt_activity_time(a.created_at) }}</td>
+          <td><a href="/projects/{{ a.project_id }}">{{ a.project_name }}</a></td>
+          <td>{{ a.target }}</td>
+          <td class="mono">{{ self.short_sha(a.commit_sha) }}</td>
+          <td><span style="font-weight:600;">{{ self.fmt_pct(a.line_rate) }}%</span></td>
+          <td>{{ a.lines_covered }}/{{ a.lines_total }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 {% endif %}
 
 <script>
+// Project pinning
+var PINNED_KEY = 'omnivore-pinned';
+function getPinned() {
+  try { return JSON.parse(localStorage.getItem(PINNED_KEY)) || []; } catch(e) { return []; }
+}
+function savePinned(pins) {
+  localStorage.setItem(PINNED_KEY, JSON.stringify(pins));
+}
+function togglePin(e, btn) {
+  e.preventDefault();
+  e.stopPropagation();
+  var id = btn.dataset.project;
+  var pins = getPinned();
+  var idx = pins.indexOf(id);
+  if (idx >= 0) { pins.splice(idx, 1); } else { pins.push(id); }
+  savePinned(pins);
+  applyPins();
+}
+function applyPins() {
+  var pins = getPinned();
+  var container = document.getElementById('project-list');
+  if (!container) return;
+  var entries = Array.from(container.querySelectorAll('.project-entry'));
+  // Update pin button states
+  entries.forEach(function(el) {
+    var btn = el.querySelector('.pin-btn');
+    var id = btn?.dataset.project;
+    var pinned = id && pins.indexOf(id) >= 0;
+    if (btn) btn.classList.toggle('pinned', pinned);
+  });
+  // Sort: pinned first, preserve original order within each group
+  var pinned = entries.filter(function(el) { return pins.indexOf(el.querySelector('.pin-btn')?.dataset.project) >= 0; });
+  var unpinned = entries.filter(function(el) { return pins.indexOf(el.querySelector('.pin-btn')?.dataset.project) < 0; });
+  pinned.concat(unpinned).forEach(function(el) { container.appendChild(el); });
+}
+applyPins();
+
 // Sparkline rendering
 document.querySelectorAll('.sparkline').forEach(function(svg) {
   var raw = svg.dataset.values;
@@ -131,23 +211,61 @@ document.querySelectorAll('.sparkline').forEach(function(svg) {
   svg.appendChild(line);
 });
 
-function filterProjects(input) {
-  var query = input.value.toLowerCase().trim();
+// Tag filter
+var activeTag = null;
+(function buildTagBar() {
+  var entries = document.querySelectorAll('.project-entry');
+  var tagSet = {};
+  entries.forEach(function(el) {
+    var tags = el.dataset.tags;
+    if (tags) tags.split(',').forEach(function(t) { t = t.trim(); if (t) tagSet[t] = true; });
+  });
+  var tags = Object.keys(tagSet).sort();
+  if (tags.length === 0) return;
+  var bar = document.getElementById('tag-filter-bar');
+  bar.style.display = '';
+  var allBtn = document.createElement('button');
+  allBtn.className = 'tag-filter-btn active';
+  allBtn.textContent = 'All';
+  allBtn.onclick = function() { activeTag = null; applyFilters(); updateTagBtns(); };
+  bar.appendChild(allBtn);
+  tags.forEach(function(tag) {
+    var btn = document.createElement('button');
+    btn.className = 'tag-filter-btn';
+    btn.textContent = tag;
+    btn.dataset.tag = tag;
+    btn.onclick = function() { activeTag = (activeTag === tag) ? null : tag; applyFilters(); updateTagBtns(); };
+    bar.appendChild(btn);
+  });
+})();
+function updateTagBtns() {
+  document.querySelectorAll('.tag-filter-btn').forEach(function(btn) {
+    var isAll = !btn.dataset.tag;
+    btn.classList.toggle('active', isAll ? !activeTag : btn.dataset.tag === activeTag);
+  });
+}
+function applyFilters() {
+  var query = document.getElementById('project-search').value.toLowerCase().trim();
   var entries = document.querySelectorAll('.project-entry');
   var clearBtn = document.querySelector('.project-search-clear');
   var visible = 0;
   clearBtn.style.display = query ? 'block' : 'none';
   entries.forEach(function(el) {
-    var match = !query || el.dataset.name.indexOf(query) !== -1 || el.dataset.id.indexOf(query) !== -1;
-    el.style.display = match ? '' : 'none';
-    if (match) visible++;
+    var textMatch = !query || el.dataset.name.indexOf(query) !== -1 || el.dataset.id.indexOf(query) !== -1;
+    var tagMatch = !activeTag || (el.dataset.tags && el.dataset.tags.indexOf(activeTag) !== -1);
+    var show = textMatch && tagMatch;
+    el.style.display = show ? '' : 'none';
+    if (show) visible++;
   });
-  document.getElementById('no-match-msg').style.display = (query && visible === 0) ? '' : 'none';
+  document.getElementById('no-match-msg').style.display = ((query || activeTag) && visible === 0) ? '' : 'none';
 }
+function filterProjects(input) { applyFilters(); }
 function clearProjectFilter() {
   var input = document.getElementById('project-search');
   input.value = '';
-  filterProjects(input);
+  activeTag = null;
+  updateTagBtns();
+  applyFilters();
   input.focus();
 }
 </script>
