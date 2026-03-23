@@ -1,31 +1,42 @@
 # Omnivore Roadmap
 
-High-value features to make Omnivore production-ready for startups, enterprises, and dev teams.
+See [FEATURES.md](FEATURES.md) for the authoritative list of built/planned features by tier and [FUTURE-IDEAS.md](FUTURE-IDEAS.md) for the full ideas backlog with complexity estimates.
 
-## Access & Identity
+## Next Up (Free Tier)
 
-- [ ] **GitHub OAuth login** — gate the dashboard behind auth; teams get user identity for free
-- [ ] **API keys for upload auth** — token-based auth for CI uploads; `api_keys` table with hashed tokens, scoped per-project or global
+- [ ] **Coverage sparklines on projects page** — ~~planned~~ Done
+- [ ] **Color-coded tags** — user-selectable colors per tag (requires structured tag format)
+- [ ] **Coverage trend embeds** — `/embed/{project_id}/trend` for wikis/Notion
 
-## Team Workflow
+## Next Up (Pro Tier)
 
-- [ ] **GitHub commit status checks** — post `success`/`failure` on the commit at ingest time based on thresholds; blocks merges when coverage drops
-- [ ] **Coverage gates on PR comments** — add pass/fail status to existing PR comments based on configured thresholds
-- [ ] **Slack/webhook notifications** — fire a webhook when coverage drops below threshold; configurable per-project
+- [ ] **GitHub commit status checks** — pass/fail via Checks API on ingest
+- [ ] **GitHub OAuth login** — admin vs viewer roles
+- [ ] **Diff coverage** — coverage for only changed lines in a PR
+- [ ] **API keys for upload auth** — token-based auth for CI uploads
 
-## Visibility
+## Next Up (Enterprise Tier)
 
-- [x] **Dashboard home summary** — aggregate stats across all projects: total projects, average coverage, how many are below threshold
-- [x] **Copy badge markdown button** — "copy to clipboard" button on the project settings page for README badge embedding
-- [x] **Retention policy in settings** — configurable full and summary snapshot retention in the global settings UI; replaces env vars
+- [ ] **SSO / SAML authentication**
+- [ ] **Audit logs** — settings changes, uploads, timestamps
+- [ ] **Inline AI suggestions** — dashboard calls AI API, renders inline
 
-## Developer Experience
+## Recently Completed
 
-- [x] **Project delete** — form POST with browser confirmation dialog to remove projects from the dashboard
-- [x] **GitHub Action for CI** — composite action at `.github/actions/upload-coverage/` that wraps the ingest curl; auto-detects commit, branch, PR from GitHub context
-- [x] **Search/filter on projects page** — client-side JS filter as the project list grows
-
-## Data & Reporting
-
-- [ ] **CSV/JSON trend export** — download trend data as CSV or JSON for external dashboards
-- [ ] **Scheduled email/Slack digests** — weekly coverage summary sent to configured channels
+- [x] Ingest history / activity log (home + project pages)
+- [x] Project tags / labels with filter bar
+- [x] Project favoriting / pinning (localStorage)
+- [x] Keyboard shortcuts (/ to search, Escape to clear)
+- [x] System health dashboard (/health)
+- [x] Dark/light theme toggle
+- [x] Coverage sparklines
+- [x] Search/filter on projects page
+- [x] Dashboard home summary
+- [x] GitHub Action for CI upload
+- [x] Project delete with confirmation
+- [x] Export reports (single + two-snapshot comparison)
+- [x] Coverage badges for READMEs
+- [x] Configurable thresholds (global + per-project)
+- [x] Data retention settings
+- [x] GitHub PR comments on ingest
+- [x] Dependency graph visualization

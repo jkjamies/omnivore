@@ -25,6 +25,8 @@ All configuration is via environment variables:
 | `RUST_LOG` | `info` | Log level (tracing filter) |
 | `GITHUB_TOKEN` | — | GitHub token for PR comments (optional) |
 | `OMNIVORE_DASHBOARD_URL` | — | Public URL for "View report" links in PR comments |
+| `OMNIVORE_RETENTION_FULL` | `30` | Full snapshots to keep per project+target |
+| `OMNIVORE_RETENTION_SUMMARY` | `60` | Summary-only snapshots to keep beyond full |
 
 ## API Endpoints
 
@@ -34,9 +36,9 @@ All configuration is via environment variables:
 POST /api/v1/ingest/coverage
 ```
 
-Universal ingestion endpoint. Accepts omnivore JSON, lcov, and llvm-cov export formats.
+Universal ingestion endpoint. Accepts omnivore JSON, lcov, llvm-cov, Go coverprofile, and Python coverage.py formats.
 
-**Auto-detection**: The format is detected from the content. Override with `?format=omnivore|lcov|llvm-cov`.
+**Auto-detection**: The format is detected from the content. Override with `?format=omnivore|lcov|llvm-cov|go|python`.
 
 **Omnivore JSON** (from Gradle plugin):
 ```sh
@@ -45,7 +47,23 @@ curl -X POST http://localhost:3000/api/v1/ingest/coverage \
   -d @omnivore-report.json
 ```
 
-**lcov** (Go, C/C++):
+**Go coverprofile**:
+```sh
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?\
+format=go&project_id=my-app&project_name=My+App&\
+commit_sha=abc123&branch=main" \
+  -d @coverage.out
+```
+
+**Python coverage.py**:
+```sh
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?\
+format=python&project_id=my-app&project_name=My+App&\
+commit_sha=abc123&branch=main" \
+  -d @coverage.json
+```
+
+**lcov** (C/C++):
 ```sh
 curl -X POST "http://localhost:3000/api/v1/ingest/coverage?\
 format=lcov&project_id=my-app&project_name=My+App&\
@@ -76,6 +94,7 @@ github_repo=owner/repo&pr_number=42&base_branch=main" \
 |---|---|---|
 | `GET` | `/api/v1/projects` | List all projects |
 | `POST` | `/api/v1/projects` | Create a project |
+| `PATCH` | `/api/v1/projects/{project_id}` | Update project settings |
 | `GET` | `/api/v1/coverage/{project_id}/latest` | Latest coverage snapshot |
 | `GET` | `/api/v1/coverage/{project_id}/trend?limit=30` | Coverage trend data |
 | `GET` | `/api/v1/coverage/{project_id}/dependencies` | Dependency graph |
@@ -85,9 +104,14 @@ github_repo=owner/repo&pr_number=42&base_branch=main" \
 
 | Path | Description |
 |---|---|
-| `/` | Project list with latest coverage bars |
-| `/projects/{id}` | Coverage stats, trend chart, file breakdown |
+| `/` | Project list with sparklines, pinning, tags, activity log |
+| `/projects/{id}` | Coverage stats, trend chart, hotspots, file tree, activity log |
+| `/projects/{id}/files/{path}` | Source code with line-level coverage annotations |
+| `/projects/{id}/settings` | GitHub repo, source root, thresholds, tags |
 | `/projects/{id}/dependencies` | D3.js dependency graph visualization |
+| `/settings` | Global thresholds, retention policy |
+| `/health` | System health (uptime, DB size, snapshots, last ingest) |
+| `/badge/{project_id}` | Shields.io-style SVG coverage badge |
 
 ## PR Comment Integration
 
@@ -153,6 +177,16 @@ RUST_LOG=debug DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo run
 ```
 
 If building from a clean state, create the database first by running the server once (it auto-creates tables), or use the `sqlite3` CLI to create the schema manually.
+
+## Feature Tiers
+
+Omnivore uses a freemium open-core model. All current dashboard features are available in the free Community tier. See [FEATURES.md](../FEATURES.md) for the full breakdown.
+
+| Tier | Includes |
+|---|---|
+| **Community (Free)** | All coverage formats, trends, file tree, hotspots, badges, thresholds, export, tags, pinning, activity log, health dashboard, dark/light theme |
+| **Pro** | PR comments, per-project thresholds, two-snapshot export, GitHub OAuth, status checks, coverage gates, notifications, diff coverage, AI prompts |
+| **Enterprise** | SSO/SAML, audit logs, per-project retention, inline AI, PR-level AI review, Postgres HA, priority support |
 
 ## License
 

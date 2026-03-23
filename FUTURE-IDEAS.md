@@ -30,8 +30,8 @@ Per-project configurable line and branch coverage thresholds with global default
 ### Badge Endpoint (Done)
 `/badge/{project_id}` — shields.io-style SVG badge for READMEs. Supports `?metric=branch` and `?target=` query params.
 
-### GitHub Action for Upload (Small)
-Reusable composite GitHub Action (`jkjamies/omnivore-upload@v1`) that wraps the `curl` ingest call. Inputs: `server`, `project_id`, `format`, `file`. Automatically pulls commit SHA, branch, and PR number from GitHub context. Requires the repo to be public (or published to Marketplace) for external consumption. Build once the repo goes public.
+### GitHub Action for Upload (Done)
+Composite GitHub Action at `.github/actions/upload-coverage/` that wraps the ingest call. Auto-detects commit SHA, branch, and PR number from GitHub context.
 
 ### Webhook Notifications (Medium)
 Configurable per-project Slack/Discord/email alerts when coverage drops below threshold or changes by more than X%.
@@ -143,20 +143,23 @@ Recommended approach: start with platform-specific CLI tools/scripts, later cons
 
 ## New Feature Ideas (Unsorted by Tier)
 
-### Dark/Light Theme Toggle (Small — Free)
-Currently relies on `prefers-color-scheme`. Add an explicit toggle in the header so users can override OS preference. Stored in localStorage, no server change.
+### Dark/Light Theme Toggle (Done)
+Explicit toggle in the header with localStorage persistence. Overrides OS `prefers-color-scheme`.
 
-### Project Favoriting / Pinning (Small — Free)
-Pin frequently used projects to the top of the dashboard. LocalStorage-based for free tier, server-persisted per-user with auth (Pro).
+### Project Favoriting / Pinning (Done — client-side; future: server-persisted per-user)
+Pin projects to the top of the dashboard via localStorage. Future: server-persisted per-user with auth (Pro).
 
-### Coverage Sparklines on Projects Page (Small — Free)
-Tiny inline trend graph (last 10-20 points) next to each project card on the home page. Gives at-a-glance trend without clicking into a project. Pure SVG, no Chart.js needed.
+### Coverage Sparklines on Projects Page (Done)
+SVG polyline sparklines (last 15 points) on each project card. Pure SVG, no Chart.js needed.
 
-### Keyboard Navigation (Small — Free)
-Arrow keys to navigate project list, `/` to focus the search filter, `Esc` to clear. Power-user UX at zero cost.
+### Keyboard Shortcuts (Done — basic)
+`/` to focus search, `Escape` to clear/blur. Kept minimal — a coverage dashboard doesn't need Vim-style navigation.
 
-### Ingest History / Activity Log (Small — Free)
-Simple table showing recent ingests: timestamp, project, target, commit SHA, coverage delta. Answers "when was data last uploaded?" without clicking into each project. Useful for debugging CI pipelines.
+### Color-Coded Tags (Small — Free)
+Allow users to assign a color to each tag via the project settings UI. Requires changing tags from comma-separated text to a structured format (individual tag management with add/remove buttons, color picker per tag). Tag pills on the home page render in the user-chosen color.
+
+### Ingest History / Activity Log (Done)
+Recent ingests table on home page (all projects, last 15) and project detail pages (per-project, last 15). Shows timestamp, project, target, commit SHA, line coverage, and lines covered.
 
 ### Coverage Annotations in GitHub Files (Small-Medium — Pro)
 Use GitHub's Checks API annotations to mark uncovered lines directly in the PR's "Files changed" tab. Developers see coverage without leaving GitHub. Builds on top of GitHub commit status checks.
@@ -167,8 +170,8 @@ Let teams configure which stats/charts appear on the home page. Drag-and-drop wi
 ### Coverage Trend Alerts (Small — Pro)
 Trigger when coverage trend crosses a threshold — not just on a single ingest, but when the 7-day moving average drops. Smarter than per-ingest notifications, fewer false alarms from one bad commit.
 
-### Project Tags / Labels (Small — Free)
-Tag projects with labels (e.g., "backend", "mobile", "critical"). Filter the projects page by tag. Simple metadata column, no auth needed.
+### Project Tags / Labels (Done)
+Comma-separated tags per project via settings page. Tag pills on project cards, tag filter bar on home page.
 
 ### API Rate Limiting (Small — Pro)
 Rate limit the ingest endpoint per API key. Prevents runaway CI from flooding the instance. Simple token bucket in memory, configurable per key.
@@ -185,8 +188,8 @@ Extend badge to support additional formats beyond shields.io SVG — JSON endpoi
 ### Bulk Project Import (Small — Free)
 Scan a GitHub org or Gradle multi-module project and auto-create projects for each module/repo. Reduces setup friction for large codebases.
 
-### Health Check Dashboard (Small — Free)
-Expand `/api/v1/health` to include: database size, snapshot count, last ingest time, uptime. Useful for monitoring the Omnivore instance itself.
+### Health Check Dashboard (Done)
+`/health` page with uptime, DB size, project count, snapshot count, last ingest time. API at `/api/v1/health` also returns extended stats.
 
 ## Monetization
 

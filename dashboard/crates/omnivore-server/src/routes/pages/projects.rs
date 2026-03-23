@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use omnivore_core::model::coverage::CoverageSnapshot;
 use omnivore_core::model::project::Project;
-use omnivore_core::storage::Database;
+use omnivore_core::storage::{ActivityEntry, Database};
 
 use super::{fmt_delta_html, fmt_pct_val, rate_color_with_threshold, TargetSnapshot};
 
@@ -30,6 +30,7 @@ pub struct HomeSummary {
 struct ProjectsPage {
     projects: Vec<ProjectWithLatest>,
     summary: Option<HomeSummary>,
+    activity: Vec<ActivityEntry>,
 }
 
 impl ProjectsPage {
@@ -41,6 +42,16 @@ impl ProjectsPage {
     }
     fn fmt_delta(&self, delta: &Option<f64>) -> String {
         fmt_delta_html(*delta)
+    }
+    fn fmt_activity_time(&self, dt: &chrono::DateTime<chrono::Utc>) -> String {
+        dt.format("%b %d, %Y %H:%M").to_string()
+    }
+    fn short_sha(&self, sha: &Option<String>) -> String {
+        sha.as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| if s.len() > 7 { &s[..7] } else { s })
+            .unwrap_or("—")
+            .to_string()
     }
 }
 
@@ -135,7 +146,9 @@ pub async fn projects_page(
         })
     };
 
-    let page = ProjectsPage { projects: items, summary };
+    let activity = db.get_recent_activity(15).await.unwrap_or_default();
+
+    let page = ProjectsPage { projects: items, summary, activity };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))
 }

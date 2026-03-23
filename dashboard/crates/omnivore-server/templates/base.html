@@ -28,6 +28,21 @@
     </div>
   </main>
 <script>
+// Global keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+  // Skip if user is typing in an input/textarea
+  var tag = document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+    if (e.key === 'Escape') { document.activeElement.blur(); }
+    return;
+  }
+  // "/" focuses any search/filter input on the page
+  if (e.key === '/') {
+    var search = document.querySelector('.project-search') || document.querySelector('.file-search');
+    if (search) { e.preventDefault(); search.focus(); }
+  }
+});
+
 (function(){
   var btn = document.getElementById('theme-toggle');
   function isDark() {

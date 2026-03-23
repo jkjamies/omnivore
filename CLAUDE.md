@@ -112,7 +112,7 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=python&project
 - Gradle plugin ID: `io.github.jkjamies.omnivore`
 - Group ID: `io.github.jkjamies`
 - Report format: `omnivore-report.json` — camelCase fields, kotlinx-serialization (Kotlin) ↔ serde (Rust)
-- Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`
+- Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`, `RUST_LLVM_COV`, `GO_COVER`, `PYTHON_COVERAGE`, `LCOV`
 
 ## CI/CD
 

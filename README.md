@@ -224,7 +224,11 @@ The dashboard starts on `http://localhost:3000`. The SQLite database is created 
 | Environment Variable | Required | Description |
 |---|---|---|
 | `DATABASE_URL` | Yes | SQLite connection string |
-| `GITHUB_TOKEN` | No | GitHub PAT for source code viewing (fetches on-demand) |
+| `BIND_ADDR` | No | Listen address (default: `0.0.0.0:3000`) |
+| `GITHUB_TOKEN` | No | GitHub PAT for source code viewing and PR comments |
+| `OMNIVORE_DASHBOARD_URL` | No | Public URL for "View report" links in PR comments |
+| `OMNIVORE_RETENTION_FULL` | No | Full snapshots to keep per project+target (default: 30) |
+| `OMNIVORE_RETENTION_SUMMARY` | No | Summary-only snapshots to keep beyond full (default: 60) |
 
 ### Source Code Viewing
 
@@ -240,7 +244,7 @@ After uploading coverage, configure project settings via the dashboard UI or API
 
 ```sh
 # Link to GitHub repo + set source root for path mapping
-curl -X PUT "http://localhost:3000/api/v1/projects/my-project" \
+curl -X PATCH "http://localhost:3000/api/v1/projects/my-project" \
   -H "Content-Type: application/json" \
   -d '{"github_repo": "owner/repo", "source_root": "app/src/main/kotlin"}'
 ```
@@ -264,8 +268,15 @@ The dashboard is a single binary + SQLite file. Deployment options:
 - **Multi-format ingestion** — omnivore JSON, llvm-cov, Go coverprofile, Python coverage.py, lcov (auto-detected)
 - **Dependency graph** — resolves and visualizes module dependencies (D3.js force-directed graph)
 - **PR comments** — posts coverage summary with delta to GitHub pull requests
-- **Dashboard** — HTMX frontend with coverage trends (Chart.js), file breakdown, dark/light theme
+- **Dashboard** — HTMX frontend with coverage trends (Chart.js), nested file tree, uncovered hotspots, dark/light theme toggle
 - **Source code viewing** — on-demand GitHub source fetching with coverage annotations
+- **Configurable thresholds** — global defaults with per-project override, gradient coverage bars
+- **Coverage badges** — shields.io-style SVG badges for READMEs (`/badge/{project_id}`)
+- **Project management** — tags/labels, pinning/favoriting, search/filter, sparkline trends
+- **Activity log** — recent ingest history on home page and project detail pages
+- **System health** — uptime, DB size, snapshot count, last ingest at `/health`
+- **Data retention** — configurable full + summary snapshot retention, automatic pruning
+- **Export reports** — Markdown/JSON, single snapshot or two-snapshot comparison
 
 ## Documentation
 

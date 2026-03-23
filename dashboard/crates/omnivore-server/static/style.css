@@ -271,6 +271,14 @@ tr:hover td { background: var(--bg-hover); }
   transition: background 0.15s;
 }
 .btn:hover { background: var(--accent-hover); }
+.btn-secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  font-size: 13px;
+  padding: 6px 14px;
+}
+.btn-secondary:hover { background: var(--accent); color: #fff; }
 
 /* Card link */
 .card-link { text-decoration: none; color: inherit; display: block; }
@@ -599,6 +607,68 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   color: var(--text-muted);
 }
 
+/* Project tags */
+.project-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tag-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  opacity: 0.85;
+}
+.tag-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.tag-filter-btn {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tag-filter-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tag-filter-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* Project pin */
+.pin-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  color: var(--text-muted);
+  padding: 4px;
+  line-height: 1;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+.pin-btn::before { content: '\2606'; }
+.pin-btn.pinned { opacity: 1; color: var(--accent); }
+.pin-btn.pinned::before { content: '\2605'; }
+.pin-btn:hover { opacity: 1; }
+
 /* Project sparkline */
 .project-sparkline {
   flex: 0 0 240px;
@@ -615,6 +685,45 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+
+/* Activity table */
+.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.activity-table th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.activity-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.activity-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+.activity-table .activity-time {
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.activity-table .mono {
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 12px;
+}
+.activity-table a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.activity-table a:hover {
+  text-decoration: underline;
 }
 
 /* Project search/filter */

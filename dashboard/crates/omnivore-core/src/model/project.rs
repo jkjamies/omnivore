@@ -21,6 +21,8 @@ pub struct Project {
     pub line_warn_threshold: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_warn_threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

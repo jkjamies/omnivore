@@ -73,17 +73,20 @@ SQLite with embedded schema creation (no migration files). Connection pool: max 
 - `RUST_LOG` — default: `info`
 - `GITHUB_TOKEN` — (optional) GitHub token for PR comments and on-demand source fetching; can also be passed per-request via `X-GitHub-Token` header
 - `OMNIVORE_DASHBOARD_URL` — (optional) public URL of this server, used for "View report" links in PR comments
+- `OMNIVORE_RETENTION_FULL` — (optional, default 30) newest N snapshots per project+target keep full file data
+- `OMNIVORE_RETENTION_SUMMARY` — (optional, default 60) next N snapshots kept as summary-only for trend charts
 
 **Tables:**
 
 ```sql
-projects (id TEXT PK, name TEXT, description TEXT, github_repo TEXT, created_at TEXT, updated_at TEXT)
+projects (id TEXT PK, name TEXT, description TEXT, github_repo TEXT, source_root TEXT, tags TEXT, created_at TEXT, updated_at TEXT,
+          line_threshold REAL, branch_threshold REAL, line_warn_threshold REAL, branch_warn_threshold REAL)
 
 coverage_snapshots (
     id TEXT PK, project_id TEXT FK→projects, commit_sha TEXT, branch TEXT,
     target TEXT, line_rate REAL, branch_rate REAL,
     lines_covered INT, lines_total INT, branches_covered INT, branches_total INT,
-    file_count INT, created_at TEXT, files_json TEXT
+    file_count INT, created_at TEXT, files_json TEXT, dependencies_json TEXT
 )
 -- Index: idx_snapshots_project ON (project_id, created_at DESC)
 ```
@@ -127,12 +130,16 @@ HTMX + Askama 0.15 templates with Chart.js for trend graphs.
 **Pages:**
 | Path | Template | Description |
 |---|---|---|
-| `/` | `projects.html` | Project list with latest coverage bars |
-| `/projects/{id}` | `project_detail.html` | Stats, trend chart, file breakdown table |
+| `/` | `projects.html` | Project list with sparklines, pinning, tags, activity log |
+| `/projects/{id}` | `project_detail.html` | Stats, trend chart, hotspots, file breakdown, activity log |
 | `/projects/{id}/files/{path}` | `file_coverage.html` | Source code with line-level coverage gutter marks (source fetched from GitHub API) |
 | `/projects/{id}/dependencies` | `dependency_graph.html` | D3.js force-directed dependency graph |
+| `/projects/{id}/settings` | `project_settings.html` | GitHub repo, source root, thresholds, tags |
+| `/settings` | `settings.html` | Global thresholds, retention policy, system health link |
+| `/health` | `health.html` | System health: uptime, DB size, snapshot count, last ingest |
+| `/badge/{project_id}` | (SVG) | Shields.io-style coverage badge |
 
-**Static assets:** `crates/omnivore-server/static/style.css` — responsive, dark/light theme via `prefers-color-scheme`. Includes `source-table` styles with `border-collapse:separate`, coverage gutter marks, hit badges, and coverage row backgrounds for the file coverage view.
+**Static assets:** `crates/omnivore-server/static/style.css` — responsive, dark/light theme via `prefers-color-scheme` + manual toggle (localStorage `data-theme`). Includes `source-table` styles with `border-collapse:separate`, coverage gutter marks, hit badges, and coverage row backgrounds for the file coverage view.
 
 **Templates:** `crates/omnivore-server/templates/` — Askama HTML with `base.html` layout.
 
@@ -140,4 +147,21 @@ HTMX + Askama 0.15 templates with Chart.js for trend graphs.
 - Helper methods on template structs (`fmt_pct`, `rate_color`, `short_sha`, `trend_json`)
 - `ServeDir` serves `/static/` from the crate's `static/` directory
 - Chart.js + HTMX loaded from CDN (no build step)
-- Coverage thresholds: green >= 80%, yellow >= 50%, red < 50%
+- Coverage thresholds: configurable per-project with global defaults (green >= threshold, yellow >= warn threshold, red < warn threshold)
+- Dark/light theme toggle with localStorage persistence
+- Keyboard shortcuts: `/` to focus search, `Escape` to clear/blur
+- Project pinning via localStorage, sparkline trend graphs (SVG polylines)
+- Project tags/labels with tag filter bar
+- Ingest activity log on home page and project detail pages
+
+**Coverage targets:** `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`, `RUST_LLVM_COV`, `GO_COVER`, `PYTHON_COVERAGE`, `LCOV` — each parser sets the appropriate target automatically.
+
+## Feature Tiers
+
+All dashboard features belong to a tier. When licensing is implemented, Pro/Enterprise features will be gated at the route/handler level. See [FEATURES.md](../FEATURES.md) for the authoritative list with build status.
+
+**Community (Free):** Multi-format ingestion, coverage trends, nested file tree, source code view, hotspots, historical deltas, gradient bars, global thresholds, home summary, search/filter, retention settings, single-snapshot export, badges, GitHub Action, project delete, dependency graph, multi-target support, Compose filtering, sparklines, pinning (localStorage), tags/labels, keyboard shortcuts, health dashboard, dark/light theme, activity log, unlimited projects.
+
+**Pro:** GitHub PR comments on ingest, per-project threshold override, two-snapshot comparison export, server-persisted pinning (planned), GitHub OAuth (planned), GitHub commit status checks (planned), PR coverage gates (planned), Slack/Discord/webhook notifications (planned), email digests (planned), API keys (planned), diff coverage (planned), AI copy-to-clipboard prompts (planned).
+
+**Enterprise:** SSO/SAML (planned), audit logs (planned), per-project retention (planned), inline AI suggestions (planned), PR-level AI test review (planned), Postgres HA backend (planned), priority support (planned).

@@ -162,6 +162,9 @@ impl ProjectSettingsPage {
     fn global_branch_warn_pct(&self) -> String {
         format!("{:.0}", self.global_settings.default_branch_warn_threshold * 100.0)
     }
+    fn project_tags(&self) -> String {
+        self.project.tags.clone().unwrap_or_default()
+    }
     fn badge_url(&self) -> String {
         let base = std::env::var("OMNIVORE_DASHBOARD_URL")
             .unwrap_or_else(|_| String::new());
@@ -231,6 +234,35 @@ pub async fn save_project_thresholds(
         .map(|v| (v / 100.0).clamp(0.0, 1.0));
 
     db.update_project_thresholds(&project_id, line, branch, line_warn, branch_warn)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
+}
+
+// -- Project tags --
+
+#[derive(Deserialize)]
+pub struct ProjectTagsForm {
+    tags: Option<String>,
+}
+
+pub async fn save_project_tags(
+    State(db): State<Database>,
+    Path(project_id): Path<String>,
+    Form(form): Form<ProjectTagsForm>,
+) -> Result<Redirect, StatusCode> {
+    let tags = form.tags.as_deref().filter(|s| !s.trim().is_empty());
+    // Normalize: trim each tag, remove empties
+    let normalized = tags.map(|s| {
+        s.split(',')
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+
+    db.update_project_tags(&project_id, normalized.as_deref())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

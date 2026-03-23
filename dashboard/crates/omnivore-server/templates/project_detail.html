@@ -129,6 +129,18 @@
 </div>
 {% endfor %}
 
+{# -- Trend chart (all targets overlaid) -- #}
+{% if self.has_trend() %}
+<div class="card">
+  <div class="card-header">
+    <h2>Coverage Trend</h2>
+  </div>
+  <div class="chart-container">
+    <canvas id="trendChart"></canvas>
+  </div>
+</div>
+{% endif %}
+
 {# -- Uncovered hotspots -- #}
 {% if self.has_hotspots() %}
 <div class="card">
@@ -215,18 +227,6 @@
 
       <button type="submit" class="btn" style="margin-top:8px;">Download Report</button>
     </form>
-  </div>
-</div>
-{% endif %}
-
-{# -- Trend chart (all targets overlaid) -- #}
-{% if self.has_trend() %}
-<div class="card">
-  <div class="card-header">
-    <h2>Coverage Trend</h2>
-  </div>
-  <div class="chart-container">
-    <canvas id="trendChart"></canvas>
   </div>
 </div>
 {% endif %}
@@ -490,6 +490,34 @@ function restoreTree(table) {
   }
 }
 </script>
+
+{% if !activity.is_empty() %}
+<h2 class="section-title" style="margin-top:32px;">Recent Activity</h2>
+<div class="card">
+  <table class="activity-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Target</th>
+        <th>Commit</th>
+        <th>Line Coverage</th>
+        <th>Lines</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in activity %}
+      <tr>
+        <td class="activity-time">{{ self.fmt_activity_time(a.created_at) }}</td>
+        <td>{{ a.target }}</td>
+        <td class="mono">{{ self.activity_short_sha(a.commit_sha) }}</td>
+        <td><span style="font-weight:600;">{{ self.fmt_pct(a.line_rate) }}%</span></td>
+        <td>{{ a.lines_covered }}/{{ a.lines_total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 {% if self.has_trend() %}
 <script>

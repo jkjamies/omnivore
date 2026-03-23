@@ -134,7 +134,7 @@ pub fn parse(input: &str, meta: &PythonCoverageMeta) -> Result<(OmnivoreReport, 
             name: project_name,
             commit_sha: meta.commit_sha.clone(),
             branch: meta.branch.clone(),
-            target: CoverageTarget::JvmUnit,
+            target: CoverageTarget::PythonCoverage,
         },
         coverage: CoverageSummary {
             line_rate,

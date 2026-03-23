@@ -1,11 +1,13 @@
 mod dependencies;
 mod file_coverage;
+mod health_page;
 mod project_detail;
 mod projects;
 
 // Re-export all public handlers
 pub use dependencies::dependency_graph_page;
 pub use file_coverage::{file_coverage_page, file_source_fragment};
+pub use health_page::health_page;
 pub use project_detail::project_detail_page;
 pub use projects::projects_page;
 
@@ -163,6 +165,10 @@ fn target_label(target: &str) -> String {
         "IOS_UNIT" | "IosUnit" => "iOS Unit Tests".to_string(),
         "KOTLIN_NATIVE" | "KotlinNative" => "Kotlin/Native Tests".to_string(),
         "COMPOSITE" | "Composite" => "Composite".to_string(),
+        "RUST_LLVM_COV" | "RustLlvmCov" => "Rust (llvm-cov)".to_string(),
+        "GO_COVER" | "GoCover" => "Go".to_string(),
+        "PYTHON_COVERAGE" | "PythonCoverage" => "Python".to_string(),
+        "LCOV" | "Lcov" => "lcov".to_string(),
         other => other.to_string(),
     }
 }
