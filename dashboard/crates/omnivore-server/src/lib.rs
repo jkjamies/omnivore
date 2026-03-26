@@ -43,11 +43,29 @@ pub fn build_router(db: Database) -> Router {
             "/projects/{project_id}/delete",
             routing::post(routes::settings::delete_project),
         )
+        // API keys (project-scoped)
+        .route(
+            "/projects/{project_id}/api-keys",
+            routing::post(routes::settings::create_project_api_key),
+        )
+        .route(
+            "/projects/{project_id}/api-keys/{key_id}/delete",
+            routing::post(routes::settings::delete_project_api_key),
+        )
         // Health page
         .route("/health", routing::get(routes::pages::health_page))
         // Settings
         .route("/settings", routing::get(routes::settings::settings_page))
         .route("/settings", routing::post(routes::settings::save_settings))
+        // API keys (global)
+        .route(
+            "/settings/api-keys",
+            routing::post(routes::settings::create_global_api_key),
+        )
+        .route(
+            "/settings/api-keys/{key_id}/delete",
+            routing::post(routes::settings::delete_global_api_key),
+        )
         .route(
             "/projects/{project_id}/files/{*file_path}",
             routing::get(routes::pages::file_coverage_page),

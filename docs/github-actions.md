@@ -39,6 +39,7 @@ jobs:
           curl -s -X POST \
             "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage" \
             -H "Content-Type: application/json" \
+            -H "X-API-Key: ${{ secrets.OMNIVORE_API_KEY }}" \
             -d @build/reports/omnivore/omnivore-report.json
 
       # Upload on PRs with comment
@@ -48,6 +49,7 @@ jobs:
           curl -s -X POST \
             "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}&base_branch=main" \
             -H "Content-Type: application/json" \
+            -H "X-API-Key: ${{ secrets.OMNIVORE_API_KEY }}" \
             -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
             -d @build/reports/omnivore/omnivore-report.json
 
@@ -69,6 +71,16 @@ Set these in **Settings > Secrets and variables > Actions > Variables**:
 | Variable | Value |
 |---|---|
 | `OMNIVORE_DASHBOARD_URL` | Your dashboard URL (e.g., `https://omnivore.example.com`) |
+
+### Repository Secrets
+
+Set these in **Settings > Secrets and variables > Actions > Secrets**:
+
+| Secret | Value |
+|---|---|
+| `OMNIVORE_API_KEY` | API key from the Omnivore dashboard Settings page |
+
+> **Note:** API key authentication is optional — if no keys have been created on the dashboard, the ingest endpoint is open. Once you create your first key, all uploads require a valid `X-API-Key` header.
 
 ### Permissions
 
@@ -94,6 +106,7 @@ permissions:
   run: |
     curl -s -X POST \
       "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?format=lcov&project_id=${{ github.event.repository.name }}&project_name=${{ github.event.repository.name }}&commit_sha=${{ github.sha }}&branch=${{ github.ref_name }}&github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}" \
+      -H "X-API-Key: ${{ secrets.OMNIVORE_API_KEY }}" \
       -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
       -d @coverage.lcov
 ```
@@ -112,6 +125,7 @@ permissions:
     curl -s -X POST \
       "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?format=llvm-cov&project_id=${{ github.event.repository.name }}&project_name=${{ github.event.repository.name }}&commit_sha=${{ github.sha }}&branch=${{ github.ref_name }}&github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}" \
       -H "Content-Type: application/json" \
+      -H "X-API-Key: ${{ secrets.OMNIVORE_API_KEY }}" \
       -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
       -d @llvm-cov.json
 ```
@@ -134,6 +148,8 @@ Instead of `curl`, you can use the built-in Gradle task:
 
 ```yaml
 - name: Upload coverage
+  env:
+    OMNIVORE_API_KEY: ${{ secrets.OMNIVORE_API_KEY }}
   run: ./gradlew omnivoreUpload -Pomnivore.dashboard.url=${{ vars.OMNIVORE_DASHBOARD_URL }}
 ```
 

@@ -3,6 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, Redirect};
 use axum::Form;
+use omnivore_core::model::api_key::{ApiKey, ApiKeyCreated};
 use omnivore_core::model::project::Project;
 use omnivore_core::model::settings::GlobalSettings;
 use omnivore_core::storage::Database;
@@ -14,6 +15,7 @@ use serde::Deserialize;
 #[template(path = "settings.html")]
 struct SettingsPage {
     settings: GlobalSettings,
+    api_keys: Vec<ApiKey>,
 }
 
 impl SettingsPage {
@@ -35,6 +37,14 @@ impl SettingsPage {
     fn retention_summary(&self) -> String {
         self.settings.retention_summary.to_string()
     }
+    fn fmt_key_date(&self, key: &ApiKey) -> String {
+        key.created_at.format("%Y-%m-%d %H:%M").to_string()
+    }
+    fn fmt_key_last_used(&self, key: &ApiKey) -> String {
+        key.last_used_at
+            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "Never".to_string())
+    }
 }
 
 pub async fn settings_page(
@@ -45,7 +55,12 @@ pub async fn settings_page(
         .await
         .unwrap_or_default();
 
-    let page = SettingsPage { settings };
+    let api_keys = db
+        .list_api_keys(None)
+        .await
+        .unwrap_or_default();
+
+    let page = SettingsPage { settings, api_keys };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))
 }
@@ -135,6 +150,7 @@ pub async fn save_settings(
 struct ProjectSettingsPage {
     project: Project,
     global_settings: GlobalSettings,
+    api_keys: Vec<ApiKey>,
 }
 
 impl ProjectSettingsPage {
@@ -165,6 +181,14 @@ impl ProjectSettingsPage {
     fn project_tags(&self) -> String {
         self.project.tags.clone().unwrap_or_default()
     }
+    fn fmt_key_date(&self, key: &ApiKey) -> String {
+        key.created_at.format("%Y-%m-%d %H:%M").to_string()
+    }
+    fn fmt_key_last_used(&self, key: &ApiKey) -> String {
+        key.last_used_at
+            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "Never".to_string())
+    }
     fn badge_url(&self) -> String {
         let base = std::env::var("OMNIVORE_DASHBOARD_URL")
             .unwrap_or_else(|_| String::new());
@@ -184,7 +208,12 @@ pub async fn project_settings_page(
 
     let global_settings = db.get_global_settings().await.unwrap_or_default();
 
-    let page = ProjectSettingsPage { project, global_settings };
+    let api_keys = db
+        .list_api_keys(Some(&project_id))
+        .await
+        .unwrap_or_default();
+
+    let page = ProjectSettingsPage { project, global_settings, api_keys };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(html))
 }
@@ -280,4 +309,82 @@ pub async fn delete_project(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Redirect::to("/"))
+}
+
+// -- API key management --
+
+#[derive(Deserialize)]
+pub struct CreateApiKeyForm {
+    name: String,
+}
+
+#[derive(Template)]
+#[template(path = "api_key_created.html")]
+struct ApiKeyCreatedPage {
+    key: ApiKeyCreated,
+}
+
+/// Create a global API key (not scoped to a project).
+pub async fn create_global_api_key(
+    State(db): State<Database>,
+    Form(form): Form<CreateApiKeyForm>,
+) -> Result<Html<String>, StatusCode> {
+    let name = form.name.trim();
+    if name.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let key = db
+        .create_api_key(name, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let page = ApiKeyCreatedPage { key };
+    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Html(html))
+}
+
+/// Delete a global API key.
+pub async fn delete_global_api_key(
+    State(db): State<Database>,
+    Path(key_id): Path<String>,
+) -> Result<Redirect, StatusCode> {
+    db.delete_api_key(&key_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Redirect::to("/settings"))
+}
+
+/// Create a project-scoped API key.
+pub async fn create_project_api_key(
+    State(db): State<Database>,
+    Path(project_id): Path<String>,
+    Form(form): Form<CreateApiKeyForm>,
+) -> Result<Html<String>, StatusCode> {
+    let name = form.name.trim();
+    if name.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let key = db
+        .create_api_key(name, Some(&project_id))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let page = ApiKeyCreatedPage { key };
+    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Html(html))
+}
+
+/// Delete a project-scoped API key.
+pub async fn delete_project_api_key(
+    State(db): State<Database>,
+    Path((project_id, key_id)): Path<(String, String)>,
+) -> Result<Redirect, StatusCode> {
+    db.delete_api_key(&key_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
 }

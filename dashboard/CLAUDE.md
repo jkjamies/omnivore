@@ -158,7 +158,7 @@ HTMX + Askama 0.15 templates with Chart.js for trend graphs.
 
 ## Feature Tiers
 
-All dashboard features belong to a tier. When licensing is implemented, Pro/Enterprise features will be gated at the route/handler level. See [FEATURES.md](../FEATURES.md) for the authoritative list with build status.
+All dashboard features belong to a tier. When licensing is implemented, Pro/Enterprise features will be gated at the route/handler level. See [features.md](../docs/features.md) for the authoritative list with build status.
 
 **Community (Free):** Multi-format ingestion, coverage trends, nested file tree, source code view, hotspots, historical deltas, gradient bars, global thresholds, home summary, search/filter, retention settings, single-snapshot export, badges, GitHub Action, project delete, dependency graph, multi-target support, Compose filtering, sparklines, pinning (localStorage), tags/labels, keyboard shortcuts, health dashboard, dark/light theme, activity log, unlimited projects.
 

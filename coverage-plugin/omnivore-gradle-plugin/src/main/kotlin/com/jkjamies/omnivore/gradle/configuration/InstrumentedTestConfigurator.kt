@@ -225,14 +225,8 @@ object InstrumentedTestConfigurator {
             task.doLast {
                 val adb = resolveAdb(project) ?: return@doLast
                 // Create directory and make it world-writable so the app process can write
-                project.exec { exec ->
-                    exec.commandLine(adb, "shell", "mkdir", "-p", DEVICE_COVERAGE_DIR)
-                    exec.isIgnoreExitValue = true
-                }
-                project.exec { exec ->
-                    exec.commandLine(adb, "shell", "chmod", "777", DEVICE_COVERAGE_DIR)
-                    exec.isIgnoreExitValue = true
-                }
+                runCommand(adb, "shell", "mkdir", "-p", DEVICE_COVERAGE_DIR)
+                runCommand(adb, "shell", "chmod", "777", DEVICE_COVERAGE_DIR)
             }
         }
 
@@ -285,11 +279,8 @@ object InstrumentedTestConfigurator {
 
                 // Strategy 2: adb pull from /data/local/tmp/omnivore/
                 if (!pulled) {
-                    val pullResult = project.exec { exec ->
-                        exec.commandLine(adb, "pull", "$DEVICE_COVERAGE_DIR/.", outputDir.absolutePath)
-                        exec.isIgnoreExitValue = true
-                    }
-                    if (pullResult.exitValue == 0) {
+                    val pullExitCode = runCommand(adb, "pull", "$DEVICE_COVERAGE_DIR/.", outputDir.absolutePath)
+                    if (pullExitCode == 0) {
                         val validFiles = outputDir.listFiles()?.filter {
                             (it.extension == "omnivore" || it.extension == "probes") && hasValidMagic(it)
                         } ?: emptyList()
@@ -341,10 +332,7 @@ object InstrumentedTestConfigurator {
                 }
 
                 // Clean up device
-                project.exec { exec ->
-                    exec.commandLine(adb, "shell", "rm", "-rf", DEVICE_COVERAGE_DIR)
-                    exec.isIgnoreExitValue = true
-                }
+                runCommand(adb, "shell", "rm", "-rf", DEVICE_COVERAGE_DIR)
             }
         }
 
@@ -601,6 +589,21 @@ object InstrumentedTestConfigurator {
             val magic = String(header, Charsets.US_ASCII)
             magic == "OMNIVORE" || magic == "OMNIPROB"
         } catch (_: Exception) { false }
+    }
+
+    /**
+     * Run a command via ProcessBuilder, returning the exit code.
+     * Replaces Project.exec() which was removed in Gradle 9.
+     */
+    private fun runCommand(vararg args: String): Int {
+        return try {
+            ProcessBuilder(*args)
+                .inheritIO()
+                .start()
+                .waitFor()
+        } catch (_: Exception) {
+            -1
+        }
     }
 
     private fun loadVersionProperties(): Properties? {

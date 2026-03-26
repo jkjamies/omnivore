@@ -126,6 +126,49 @@
   </div>
 </div>
 
+<div class="card">
+  <div class="card-header">
+    <h2>API Keys</h2>
+  </div>
+  <p class="settings-hint">Project-scoped keys can only upload coverage to this project.</p>
+
+  {% if api_keys.is_empty() %}
+    <p class="settings-hint" style="font-style:italic;">No project-scoped keys. Global keys (from Settings) can also upload to this project.</p>
+  {% else %}
+    <table class="api-keys-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Prefix</th>
+          <th>Created</th>
+          <th>Last Used</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in &api_keys %}
+        <tr>
+          <td>{{ key.name }}</td>
+          <td class="mono">{{ key.key_prefix }}...</td>
+          <td>{{ self.fmt_key_date(key) }}</td>
+          <td>{{ self.fmt_key_last_used(key) }}</td>
+          <td>
+            <form method="post" action="/projects/{{ project.id }}/api-keys/{{ key.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete API key &quot;{{ key.name }}&quot;?')">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <form method="post" action="/projects/{{ project.id }}/api-keys" class="api-key-create-form">
+    <input type="text" name="name" placeholder="Key name (e.g., CI Pipeline)" required>
+    <button type="submit" class="btn">Create Key</button>
+  </form>
+</div>
+
 <div class="card card-danger">
   <div class="card-header">
     <h2>Danger Zone</h2>

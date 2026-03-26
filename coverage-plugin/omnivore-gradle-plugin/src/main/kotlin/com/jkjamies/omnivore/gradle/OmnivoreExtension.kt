@@ -101,8 +101,8 @@ abstract class DashboardConfig {
     /** Omnivore dashboard server URL */
     abstract val url: Property<String>
 
-    /** Authentication token */
-    abstract val token: Property<String>
+    /** API key for authenticated uploads (prefer env var OMNIVORE_API_KEY or gradle property omnivore.apiKey) */
+    abstract val apiKey: Property<String>
 
     /** Project identifier on the dashboard */
     abstract val projectId: Property<String>

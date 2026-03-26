@@ -99,6 +99,49 @@
 
 <div class="card" style="margin-top:24px;">
   <div class="card-header">
+    <h2>API Keys</h2>
+  </div>
+  <p class="settings-hint">Global API keys can upload coverage to any project. Create project-scoped keys from individual project settings.</p>
+
+  {% if api_keys.is_empty() %}
+    <p class="settings-hint" style="font-style:italic;">No API keys yet. While no keys exist, the ingest endpoint is open (no authentication required).</p>
+  {% else %}
+    <table class="api-keys-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Prefix</th>
+          <th>Created</th>
+          <th>Last Used</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in &api_keys %}
+        <tr>
+          <td>{{ key.name }}</td>
+          <td class="mono">{{ key.key_prefix }}...</td>
+          <td>{{ self.fmt_key_date(key) }}</td>
+          <td>{{ self.fmt_key_last_used(key) }}</td>
+          <td>
+            <form method="post" action="/settings/api-keys/{{ key.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete API key &quot;{{ key.name }}&quot;?')">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <form method="post" action="/settings/api-keys" class="api-key-create-form">
+    <input type="text" name="name" placeholder="Key name (e.g., CI Pipeline)" required>
+    <button type="submit" class="btn">Create Key</button>
+  </form>
+</div>
+
+<div class="card" style="margin-top:24px;">
+  <div class="card-header">
     <h2>System Health</h2>
     <a href="/health" class="btn btn-secondary">View Details</a>
   </div>
