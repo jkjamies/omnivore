@@ -16,12 +16,10 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Configurable thresholds — global defaults | Built |
 | Dashboard home summary (total projects, avg coverage, pass/warn/fail counts) | Built |
 | Search/filter on projects page | Built |
-| Data retention settings (full + summary snapshots, global) | Built |
-| Export reports (Markdown/JSON, single snapshot) | Built |
-| Coverage badges for READMEs (`/badge/{project_id}`) | Built |
+| Data retention — default limits (30 full / 60 summary per project+target) | Built |
+| Coverage badges for READMEs — Markdown, HTML, URL snippets (`/badge/{project_id}`) | Built |
 | GitHub Action for CI upload (`.github/actions/upload-coverage/`) | Built |
 | Project delete with confirmation | Built |
-| Dependency graph visualization (D3.js, Gradle projects) | Built |
 | Multi-target support (unit + instrumented shown separately + composite) | Built |
 | Compose-aware filtering (auto-detected, zero-cost on non-Compose) | Built |
 | Coverage sparklines on projects page | Built |
@@ -39,11 +37,13 @@ Tracks which features exist in the project and which tier they belong to. Featur
 |---|---|
 | GitHub PR comments on ingest (coverage summary, delta, file breakdown) | Built |
 | Configurable thresholds — per-project override | Built |
+| Export reports — single snapshot (Markdown/JSON) | Built |
 | Export reports — two-snapshot comparison | Built |
+| Dependency graph visualization (D3.js, Gradle projects) | Built |
+| Configurable retention limits | Planned |
 | Project favoriting / pinning (server-persisted per-user) | Planned |
 | GitHub OAuth login (admin vs viewer roles) | Planned |
-| GitHub commit status checks (pass/fail on PRs via Checks API) | Planned |
-| PR coverage gates (block merges when coverage drops) | Planned |
+| PR coverage gates (block merges when coverage drops, via GitHub Action) | Planned |
 | Slack/Discord/webhook notifications | Planned |
 | Email digests (weekly/monthly summaries) | Planned |
 | API keys + token-based upload auth | Planned |
