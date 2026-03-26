@@ -7,11 +7,8 @@ Enhancements and features under consideration. Items marked with complexity esti
 ### Diff Coverage (Medium)
 Show coverage for only the lines changed in a PR. Requires resolving git diff to file/line ranges and intersecting with coverage data. High impact for code review — answers "are my new lines tested?"
 
-### Historical Comparison / Deltas (Done — basic; future: branch comparison)
-Shows delta between latest and previous snapshot on project list, detail page, and file tree. Future: compare coverage across branches (e.g., main vs feature-branch), pick-two-snapshots comparison UI, line-level diff ("these specific lines became covered/uncovered").
-
-### Uncovered Code Hotspots (Done)
-Ranks files by number of uncovered lines on the project detail page. Sortable columns on the file tree (click Lines/Branches headers to sort ascending/descending, click again to restore tree view).
+### Branch Comparison (Medium)
+Compare coverage across branches (e.g., main vs feature-branch), pick-two-snapshots comparison UI, line-level diff ("these specific lines became covered/uncovered"). Extends the existing historical deltas feature.
 
 ### Merge Coverage (Medium)
 Unified view combining coverage from multiple test targets (unit + instrumented). Line-level union so you see what's covered by *any* test type. Useful for the composite card.
@@ -24,22 +21,13 @@ Track which test method covers which lines. Enables "which tests should I run fo
 ### GitHub Check Runs (Small-Medium)
 Post pass/fail status checks via GitHub Checks API on ingest. Pairs with configurable thresholds to enable branch protection enforcement.
 
-### Coverage Thresholds / Gates (Done — basic; future: ingest-time enforcement)
-Per-project configurable line and branch coverage thresholds with global defaults. Global settings page (`/settings`) and per-project override via modal on project detail page. Thresholds drive status badges, coverage bar colors, and badge endpoint colors. Projects inherit global defaults unless overridden (NULL = inherit). Future: check thresholds on ingest and return pass/fail status, block PRs when combined with GitHub Check Runs.
-
-### Badge Endpoint (Done)
-`/badge/{project_id}` — shields.io-style SVG badge for READMEs. Supports `?metric=branch` and `?target=` query params.
-
-### GitHub Action for Upload (Done)
-Composite GitHub Action at `.github/actions/upload-coverage/` that wraps the ingest call. Auto-detects commit SHA, branch, and PR number from GitHub context.
+### Ingest-Time Threshold Enforcement (Small)
+Check thresholds on ingest and return pass/fail status in the API response. Foundation for GitHub Check Runs and PR coverage gates.
 
 ### Webhook Notifications (Medium)
 Configurable per-project Slack/Discord/email alerts when coverage drops below threshold or changes by more than X%.
 
 ## Dashboard UX
-
-### Search/Filter in File Tree (Done)
-Client-side text filter on file breakdown tree. Matches against full file paths, shows ancestor directories of matches.
 
 ### Multi-Branch Support (Medium-Large)
 Compare coverage across branches. Schema changes for branch-aware queries, UI for branch picker. Important for teams with long-lived feature branches.
@@ -47,11 +35,32 @@ Compare coverage across branches. Schema changes for branch-aware queries, UI fo
 ### Team/Org Grouping (Small)
 Organize projects into teams or groups. Simple tagging or folder structure on the projects page. Low value until there are many projects.
 
-### Gradient Coverage Bars (Done)
-Coverage bars use red→yellow→green gradient with color transitions at threshold points (50%, 80%). Visually communicates proximity to thresholds.
+### Color-Coded Tags (Small — Free)
+Allow users to assign a color to each tag via the project settings UI. Requires changing tags from comma-separated text to a structured format (individual tag management with add/remove buttons, color picker per tag). Tag pills on the home page render in the user-chosen color.
 
-### Nested File Tree (Done)
-Directory-grouped file breakdown with collapsible folders, path collapsing for single-child directories, and aggregate coverage per directory.
+### Coverage Annotations in GitHub Files (Small-Medium — Pro)
+Use GitHub's Checks API annotations to mark uncovered lines directly in the PR's "Files changed" tab. Developers see coverage without leaving GitHub. Builds on top of GitHub commit status checks.
+
+### Custom Dashboard Widgets (Medium — Pro)
+Let teams configure which stats/charts appear on the home page. Drag-and-drop widget layout. Some teams care about branch coverage, others about trend direction.
+
+### Coverage Trend Alerts (Small — Pro)
+Trigger when coverage trend crosses a threshold — not just on a single ingest, but when the 7-day moving average drops. Smarter than per-ingest notifications, fewer false alarms from one bad commit.
+
+### Coverage Trend Embeds (Small — Free)
+`/embed/{project_id}/trend` — an embeddable iframe-friendly trend chart for wikis, Notion, internal docs. SVG or lightweight HTML, no auth required.
+
+### Snapshot Annotations / Notes (Small — Pro)
+Attach notes to specific snapshots: "deployed v2.3", "refactored auth module", "intentional coverage drop — removed deprecated code". Context for why coverage changed.
+
+### Bulk Project Import (Small — Free)
+Scan a GitHub org or Gradle multi-module project and auto-create projects for each module/repo. Reduces setup friction for large codebases.
+
+### API Rate Limiting (Small — Pro)
+Rate limit the ingest endpoint per API key. Prevents runaway CI from flooding the instance. Simple token bucket in memory, configurable per key.
+
+### Server-Persisted Pinning (Small — Pro)
+Extend localStorage-based pinning to server-persisted per-user favorites. Requires authentication.
 
 ## Scalability
 
@@ -83,18 +92,10 @@ The self-hosted model means:
 
 ## Data Management
 
-### Retention Policy (Done — basic; future: per-project config)
-Server-wide retention via env vars, pruned on each ingest:
-- `OMNIVORE_RETENTION_FULL` (default 30) — newest N snapshots per project+target keep full file data
-- `OMNIVORE_RETENTION_SUMMARY` (default 60) — next N snapshots kept as summary-only (`files_json` nulled) for trend charts
-- Beyond that: deleted automatically
+### Per-Project Retention (Small — Enterprise)
+Per-project configurable limits. Add `retention_full` and `retention_summary` columns to `projects` table, fall back to env var defaults. Important for enterprise/compliance.
 
-**Future**: per-project configurable limits (important for enterprise/compliance). Add `retention_full` and `retention_summary` columns to `projects` table, fall back to env var defaults.
-
-### Export Reports (Done — basic; future: richer detail)
-Project-level export at `/projects/{id}/export` with two snapshot pickers (compare any two points in time) and Markdown/JSON format selector. Report includes: overview stats, file distribution by threshold, per-target breakdown with deltas and status. Standalone mode (no comparison) also supported.
-
-**Future enhancements:**
+### Export Report Enhancements (Medium)
 - Richer statistics: coverage trends over selected time period, package/directory-level aggregates, complexity-weighted coverage
 - Comparative file change summaries: counts of improved/regressed/new files between snapshots
 - Additional formats: PDF, HTML standalone
@@ -114,16 +115,16 @@ Replace manual `GITHUB_TOKEN` env var and per-project `github_repo` with a first
 
 ## AI-Powered Suggestions
 
-### Copy-to-Clipboard Prompts (Small)
+### Copy-to-Clipboard Prompts (Small — Pro)
 Generate context-aware prompts users can copy into their AI tool (Claude, ChatGPT, etc.). No API key required. Surfaces:
 - **Hotspots**: prompt with file path, uncovered line ranges, and coverage context — "write unit tests for these uncovered lines"
 - **File coverage view**: button that builds a prompt from specific uncovered lines asking for test suggestions
 - **Delta drops**: when coverage decreased, prompt asking what tests would restore coverage in affected files
 
-### Inline AI Suggestions (Medium)
+### Inline AI Suggestions (Medium — Enterprise)
 User-configurable API key (Claude, OpenAI, etc.). Dashboard calls the API and renders suggestions inline. Collapsible "AI Suggestions" panel on hotspots and file coverage views. Same surfaces as copy-to-clipboard but automatic.
 
-### PR-Level AI Test Review (Medium-Large)
+### PR-Level AI Test Review (Medium-Large — Enterprise)
 On ingest with PR context, generate AI-powered test suggestions as part of the GitHub PR comment. Identifies uncovered new/changed lines and suggests specific tests to write. Depends on Diff Coverage being implemented first.
 
 ## Plugin/Agent
@@ -141,56 +142,6 @@ Extend dependency graph extraction beyond Gradle to other ecosystems. Current Gr
 
 Recommended approach: start with platform-specific CLI tools/scripts, later consolidate into a universal `omnivore` CLI binary. The existing `DependencyGraph` data model is already platform-agnostic — just needs different producers.
 
-## New Feature Ideas (Unsorted by Tier)
-
-### Dark/Light Theme Toggle (Done)
-Explicit toggle in the header with localStorage persistence. Overrides OS `prefers-color-scheme`.
-
-### Project Favoriting / Pinning (Done — client-side; future: server-persisted per-user)
-Pin projects to the top of the dashboard via localStorage. Future: server-persisted per-user with auth (Pro).
-
-### Coverage Sparklines on Projects Page (Done)
-SVG polyline sparklines (last 15 points) on each project card. Pure SVG, no Chart.js needed.
-
-### Keyboard Shortcuts (Done — basic)
-`/` to focus search, `Escape` to clear/blur. Kept minimal — a coverage dashboard doesn't need Vim-style navigation.
-
-### Color-Coded Tags (Small — Free)
-Allow users to assign a color to each tag via the project settings UI. Requires changing tags from comma-separated text to a structured format (individual tag management with add/remove buttons, color picker per tag). Tag pills on the home page render in the user-chosen color.
-
-### Ingest History / Activity Log (Done)
-Recent ingests table on home page (all projects, last 15) and project detail pages (per-project, last 15). Shows timestamp, project, target, commit SHA, line coverage, and lines covered.
-
-### Coverage Annotations in GitHub Files (Small-Medium — Pro)
-Use GitHub's Checks API annotations to mark uncovered lines directly in the PR's "Files changed" tab. Developers see coverage without leaving GitHub. Builds on top of GitHub commit status checks.
-
-### Custom Dashboard Widgets (Medium — Pro)
-Let teams configure which stats/charts appear on the home page. Drag-and-drop widget layout. Some teams care about branch coverage, others about trend direction.
-
-### Coverage Trend Alerts (Small — Pro)
-Trigger when coverage trend crosses a threshold — not just on a single ingest, but when the 7-day moving average drops. Smarter than per-ingest notifications, fewer false alarms from one bad commit.
-
-### Project Tags / Labels (Done)
-Comma-separated tags per project via settings page. Tag pills on project cards, tag filter bar on home page.
-
-### API Rate Limiting (Small — Pro)
-Rate limit the ingest endpoint per API key. Prevents runaway CI from flooding the instance. Simple token bucket in memory, configurable per key.
-
-### Coverage Trend Embeds (Small — Free)
-`/embed/{project_id}/trend` — an embeddable iframe-friendly trend chart for wikis, Notion, internal docs. SVG or lightweight HTML, no auth required.
-
-### Snapshot Annotations / Notes (Small — Pro)
-Attach notes to specific snapshots: "deployed v2.3", "refactored auth module", "intentional coverage drop — removed deprecated code". Context for why coverage changed.
-
-### Multi-Format Badge Endpoint (Small — Free)
-Extend badge to support additional formats beyond shields.io SVG — JSON endpoint for custom badge rendering, HTML badge for wikis/docs.
-
-### Bulk Project Import (Small — Free)
-Scan a GitHub org or Gradle multi-module project and auto-create projects for each module/repo. Reduces setup friction for large codebases.
-
-### Health Check Dashboard (Done)
-`/health` page with uptime, DB size, project count, snapshot count, last ingest time. API at `/api/v1/health` also returns extended stats.
-
 ## Monetization
 
 ### Freemium Open-Core Model
@@ -204,16 +155,18 @@ Self-hosted, free core with paid tiers for advanced features. Free trial period 
 - Configurable thresholds (global defaults)
 - Coverage badges for READMEs
 - GitHub Action for CI upload
-- Data retention settings
-- Export reports (single snapshot)
+- Data retention — fixed defaults (30 full / 60 summary)
+- View all data in dashboard (no export)
 
 **Pro ($X/year per instance — 30-day free trial):**
 - Everything in Community
+- Export reports — single snapshot (Markdown/JSON)
+- Export reports — two-snapshot comparison
+- Configurable retention limits
+- Dependency graph visualization
 - GitHub OAuth login (admin vs viewer roles)
 - GitHub PR comments on ingest (coverage summary, delta, file breakdown)
 - Configurable thresholds — per-project override
-- Export reports — two-snapshot comparison
-- GitHub commit status checks (pass/fail on PRs)
 - PR coverage gates (block merges when coverage drops)
 - Slack/Discord/webhook notifications
 - Email digests (weekly/monthly summaries)
