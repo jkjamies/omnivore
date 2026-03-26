@@ -90,7 +90,7 @@ runs:
         # Build headers
         HEADERS=()
         if [ -n "$INPUT_API_KEY" ]; then
-          HEADERS+=(-H "Authorization: Bearer ${INPUT_API_KEY}")
+          HEADERS+=(-H "X-API-Key: ${INPUT_API_KEY}")
         fi
         if [ -n "$INPUT_GITHUB_TOKEN" ]; then
           HEADERS+=(-H "X-GitHub-Token: ${INPUT_GITHUB_TOKEN}")

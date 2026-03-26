@@ -72,7 +72,7 @@ abstract class OmnivoreUploadTask : DefaultTask() {
             connection.readTimeout = 30_000
 
             if (authToken.isPresent) {
-                connection.setRequestProperty("Authorization", "Bearer ${authToken.get()}")
+                connection.setRequestProperty("X-API-Key", authToken.get())
             }
 
             connection.outputStream.use { it.write(json.toByteArray()) }

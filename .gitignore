@@ -22,3 +22,7 @@ Thumbs.db
 
 # Environment
 .env
+
+# Gradle properties (may contain API keys)
+gradle.properties
+

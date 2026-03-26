@@ -91,7 +91,15 @@ class OmnivorePlugin : Plugin<Project> {
             task.dependsOn(reportTask)
 
             task.dashboardUrl.convention(extension.dashboard.url)
-            task.authToken.convention(extension.dashboard.token)
+            // API key resolution: env var > gradle property > DSL
+            val apiKeyFromEnv = System.getenv("OMNIVORE_API_KEY")
+            val apiKeyFromProp = project.findProperty("omnivore.apiKey") as? String
+            val resolvedKey = apiKeyFromEnv ?: apiKeyFromProp
+            if (resolvedKey != null) {
+                task.authToken.convention(resolvedKey)
+            } else {
+                task.authToken.convention(extension.dashboard.apiKey)
+            }
         }
     }
 

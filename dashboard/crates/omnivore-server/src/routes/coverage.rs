@@ -44,6 +44,30 @@ pub async fn ingest_coverage(
     Query(params): Query<IngestParams>,
     body: String,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
+    // API key authentication (backwards-compatible: skip if no keys exist)
+    let has_keys = db.any_api_keys_exist().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}"))
+    })?;
+
+    let validated_key = if has_keys {
+        let raw_key = headers
+            .get("X-API-Key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                (StatusCode::UNAUTHORIZED, "Missing X-API-Key header".to_string())
+            })?;
+
+        let api_key = db.validate_api_key(raw_key).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}"))
+        })?;
+
+        Some(api_key.ok_or_else(|| {
+            (StatusCode::UNAUTHORIZED, "Invalid API key".to_string())
+        })?)
+    } else {
+        None
+    };
+
     let format = match &params.format {
         Some(f) => CoverageFormat::from_str_loose(f)
             .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Unknown format: {f}. Use omnivore, lcov, llvm-cov, go, or python")))?,
@@ -97,6 +121,21 @@ pub async fn ingest_coverage(
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid Python coverage.py JSON: {e}")))?
         }
     };
+
+    // Project-scoped key: verify it matches the project being uploaded to
+    if let Some(ref key) = validated_key {
+        if let Some(ref key_project_id) = key.project_id {
+            if key_project_id != &snapshot.project_id {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    format!(
+                        "API key is scoped to project '{}', cannot upload to '{}'",
+                        key_project_id, snapshot.project_id
+                    ),
+                ));
+            }
+        }
+    }
 
     let project_name = report.project.name.clone();
     db.ingest_snapshot(&snapshot, Some(&project_name))

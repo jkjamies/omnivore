@@ -38,6 +38,8 @@ POST /api/v1/ingest/coverage
 
 Universal ingestion endpoint. Accepts omnivore JSON, lcov, llvm-cov, Go coverprofile, and Python coverage.py formats.
 
+**Authentication**: Optional API key via `X-API-Key` header. While no keys exist in the database, the endpoint is open. Once a key is created (Settings page), all uploads require a valid key. Keys can be global or project-scoped.
+
 **Auto-detection**: The format is detected from the content. Override with `?format=omnivore|lcov|llvm-cov|go|python`.
 
 **Omnivore JSON** (from Gradle plugin):
@@ -180,7 +182,7 @@ If building from a clean state, create the database first by running the server 
 
 ## Feature Tiers
 
-Omnivore uses a freemium open-core model. All current dashboard features are available in the free Community tier. See [FEATURES.md](../FEATURES.md) for the full breakdown.
+Omnivore uses a freemium open-core model. All current dashboard features are available in the free Community tier. See [features.md](../docs/features.md) for the full breakdown.
 
 | Tier | Includes |
 |---|---|

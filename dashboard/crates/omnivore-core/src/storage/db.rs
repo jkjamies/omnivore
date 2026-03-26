@@ -1,7 +1,9 @@
+use crate::model::api_key::{ApiKey, ApiKeyCreated};
 use crate::model::coverage::CoverageSnapshot;
 use crate::model::project::{CreateProject, Project};
 use crate::model::settings::GlobalSettings;
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 #[derive(Clone)]
@@ -219,6 +221,32 @@ impl Database {
                 .execute(&self.pool)
                 .await?;
         }
+
+        // API keys table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS api_keys (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                key_prefix TEXT NOT NULL,
+                project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Enable foreign keys for CASCADE support
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -453,6 +481,140 @@ impl Database {
         )
         .fetch_all(&self.pool)
         .await
+    }
+
+    // -- API Keys --
+
+    fn hash_key(raw_key: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(raw_key.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    pub async fn create_api_key(
+        &self,
+        name: &str,
+        project_id: Option<&str>,
+    ) -> Result<ApiKeyCreated, sqlx::Error> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let raw_key = format!(
+            "omni_{}{}",
+            uuid::Uuid::new_v4().simple(),
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
+        let key_prefix = raw_key[..8].to_string();
+        let key_hash = Self::hash_key(&raw_key);
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO api_keys (id, name, key_hash, key_prefix, project_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(name)
+        .bind(&key_hash)
+        .bind(&key_prefix)
+        .bind(project_id)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(ApiKeyCreated {
+            id,
+            name: name.to_string(),
+            key: raw_key,
+            key_prefix,
+            project_id: project_id.map(String::from),
+        })
+    }
+
+    pub async fn list_api_keys(
+        &self,
+        project_id: Option<&str>,
+    ) -> Result<Vec<ApiKey>, sqlx::Error> {
+        match project_id {
+            None => {
+                sqlx::query_as!(
+                    ApiKey,
+                    r#"SELECT id as "id!: String",
+                              name as "name!: String",
+                              key_prefix as "key_prefix!: String",
+                              key_hash as "key_hash!: String",
+                              project_id as "project_id: String",
+                              created_at as "created_at!: DateTime<Utc>",
+                              last_used_at as "last_used_at: DateTime<Utc>"
+                       FROM api_keys
+                       WHERE project_id IS NULL
+                       ORDER BY created_at DESC"#
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+            Some(pid) => {
+                sqlx::query_as!(
+                    ApiKey,
+                    r#"SELECT id as "id!: String",
+                              name as "name!: String",
+                              key_prefix as "key_prefix!: String",
+                              key_hash as "key_hash!: String",
+                              project_id as "project_id: String",
+                              created_at as "created_at!: DateTime<Utc>",
+                              last_used_at as "last_used_at: DateTime<Utc>"
+                       FROM api_keys
+                       WHERE project_id = ?
+                       ORDER BY created_at DESC"#,
+                    pid
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
+    }
+
+    pub async fn delete_api_key(&self, id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM api_keys WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn validate_api_key(&self, raw_key: &str) -> Result<Option<ApiKey>, sqlx::Error> {
+        let key_hash = Self::hash_key(raw_key);
+        let result = sqlx::query_as!(
+            ApiKey,
+            r#"SELECT id as "id!: String",
+                      name as "name!: String",
+                      key_prefix as "key_prefix!: String",
+                      key_hash as "key_hash!: String",
+                      project_id as "project_id: String",
+                      created_at as "created_at!: DateTime<Utc>",
+                      last_used_at as "last_used_at: DateTime<Utc>"
+               FROM api_keys
+               WHERE key_hash = ?"#,
+            key_hash
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(ref key) = result {
+            let now = Utc::now().to_rfc3339();
+            sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE id = ?")
+                .bind(&now)
+                .bind(&key.id)
+                .execute(&self.pool)
+                .await?;
+        }
+
+        Ok(result)
+    }
+
+    pub async fn any_api_keys_exist(&self) -> Result<bool, sqlx::Error> {
+        let count: i32 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM api_keys")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count > 0)
     }
 
     // -- Coverage snapshots --

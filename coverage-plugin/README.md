@@ -80,7 +80,7 @@ omnivore {
     // Dashboard upload
     dashboard {
         url.set("http://localhost:3000")
-        token.set(providers.environmentVariable("OMNIVORE_TOKEN"))
+        apiKey.set(providers.environmentVariable("OMNIVORE_API_KEY"))
         projectId.set("my-project")  // Defaults to project.name
     }
 }

@@ -230,6 +230,20 @@ The dashboard starts on `http://localhost:3000`. The SQLite database is created 
 | `OMNIVORE_RETENTION_FULL` | No | Full snapshots to keep per project+target (default: 30) |
 | `OMNIVORE_RETENTION_SUMMARY` | No | Summary-only snapshots to keep beyond full (default: 60) |
 
+### API Key Authentication
+
+The ingest endpoint supports optional API key authentication. While no keys exist, the endpoint is open — once you create your first key (via the Settings page), all uploads require a valid `X-API-Key` header:
+
+```sh
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage" \
+  -H "X-API-Key: omni_your_key_here" \
+  --data-binary @coverage.json
+```
+
+Keys can be **global** (upload to any project) or **project-scoped** (restricted to one project). Create and manage keys from the dashboard Settings page or individual project settings.
+
+For CI, store the key as a secret (e.g., `OMNIVORE_API_KEY` in GitHub Actions). See [GitHub Actions Integration](docs/github-actions.md) for examples.
+
 ### Source Code Viewing
 
 To see annotated source code in the dashboard:

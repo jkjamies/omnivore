@@ -1127,6 +1127,71 @@ tr:not(.line-covered):not(.line-uncovered) .line-code pre {
   background: var(--bg-hover, rgba(128,128,128,0.1));
 }
 
+/* API keys */
+.api-keys-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.api-keys-table th,
+.api-keys-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.api-keys-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.api-keys-table td:last-child {
+  text-align: right;
+}
+.btn-sm {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.api-key-create-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+.api-key-create-form input[type="text"] {
+  flex: 1;
+  max-width: 300px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+.api-key-reveal {
+  margin: 12px 0;
+}
+.api-key-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  overflow-x: auto;
+}
+.api-key-box code {
+  flex: 1;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 768px) {
   .stats { grid-template-columns: 1fr 1fr; }
   .stat-value { font-size: 22px; }

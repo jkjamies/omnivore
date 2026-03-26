@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}API Key Created — Omnivore{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+  {% match key.project_id %}
+    {% when Some with (pid) %}
+      <a href="/">Projects</a> / <a href="/projects/{{ pid }}/settings">Settings</a> / API Key Created
+    {% when None %}
+      <a href="/">Dashboard</a> / <a href="/settings">Settings</a> / API Key Created
+  {% endmatch %}
+</div>
+
+<div class="page-header">
+  <h1>API Key Created</h1>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>{{ key.name }}</h2>
+  </div>
+  <div class="api-key-reveal">
+    <p><strong>Copy your API key now.</strong> It will not be shown again.</p>
+    <div class="api-key-box">
+      <code id="apiKeyValue">{{ key.key }}</code>
+      <button type="button" class="btn-copy" onclick="copyKey()" title="Copy to clipboard">&#x2398;</button>
+    </div>
+    <p class="settings-hint">Prefix: <code>{{ key.key_prefix }}...</code></p>
+  </div>
+
+  <div style="margin-top:16px;">
+    <h3>Usage</h3>
+    <p class="settings-hint">Include the key in your upload requests:</p>
+    <div class="api-key-box">
+      <code>curl -X POST http://&lt;server&gt;/api/v1/ingest/coverage \
+  -H "X-API-Key: {{ key.key }}" \
+  --data-binary @coverage.json</code>
+    </div>
+  </div>
+
+  <div style="margin-top:16px;">
+    {% match key.project_id %}
+      {% when Some with (pid) %}
+        <a href="/projects/{{ pid }}/settings" class="btn">Back to Project Settings</a>
+      {% when None %}
+        <a href="/settings" class="btn">Back to Settings</a>
+    {% endmatch %}
+  </div>
+</div>
+
+<script>
+function copyKey() {
+  var el = document.getElementById('apiKeyValue');
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(function() {
+    var btn = el.parentElement.querySelector('.btn-copy');
+    if (btn) { var orig = btn.innerHTML; btn.innerHTML = '&#x2713;'; setTimeout(function(){ btn.innerHTML = orig; }, 1500); }
+  });
+}
+</script>
+{% endblock %}
