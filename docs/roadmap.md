@@ -10,7 +10,7 @@ See [features.md](features.md) for built features by tier and [future-ideas.md](
 ## Next Up (Pro Tier)
 
 - [x] **API keys for upload auth** — token-based auth for CI uploads
-- [ ] **GitHub OAuth login** — admin vs viewer roles, per-user source fetching
+- [x] **GitHub OAuth login** — admin vs viewer roles, per-user source fetching
 - [ ] **Diff coverage** — coverage for only changed lines in a PR (server-side, can't be done client-side)
 
 ## Next Up (Enterprise Tier)

@@ -18,6 +18,7 @@
       <nav>
         <a href="/">Projects</a>
         <a href="/settings">Settings</a>
+        <span id="user-menu"></span>
         <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme"></button>
       </nav>
     </div>
@@ -42,6 +43,21 @@ document.addEventListener('keydown', function(e) {
     if (search) { e.preventDefault(); search.focus(); }
   }
 });
+
+// Auth: user menu
+(function(){
+  var menu = document.getElementById('user-menu');
+  fetch('/auth/me').then(function(r){ return r.json(); }).then(function(s){
+    if (!s.oauth_enabled) return;
+    if (s.logged_in) {
+      var img = s.avatar_url ? '<img src="'+s.avatar_url+'&s=28" class="avatar" width="28" height="28" alt="">' : '';
+      menu.innerHTML = img + '<span class="username">' + s.username + '</span>' +
+        '<form method="post" action="/auth/logout" style="display:inline"><button type="submit" class="btn-link">Logout</button></form>';
+    } else {
+      menu.innerHTML = '<a href="/auth/login" class="login-link">Login</a>';
+    }
+  }).catch(function(){});
+})();
 
 (function(){
   var btn = document.getElementById('theme-toggle');

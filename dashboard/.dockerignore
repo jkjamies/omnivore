@@ -1,0 +1,6 @@
+target/
+omnivore.db
+omnivore.db-journal
+omnivore.db-wal
+omnivore.db-shm
+.env

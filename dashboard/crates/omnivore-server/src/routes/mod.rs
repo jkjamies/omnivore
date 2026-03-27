@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod badge;
 pub mod coverage;
 pub mod export;

@@ -229,6 +229,10 @@ The dashboard starts on `http://localhost:3000`. The SQLite database is created 
 | `OMNIVORE_DASHBOARD_URL` | No | Public URL for "View report" links in PR comments |
 | `OMNIVORE_RETENTION_FULL` | No | Full snapshots to keep per project+target (default: 30) |
 | `OMNIVORE_RETENTION_SUMMARY` | No | Summary-only snapshots to keep beyond full (default: 60) |
+| `GITHUB_CLIENT_ID` | No | GitHub OAuth App client ID (enables login) |
+| `GITHUB_CLIENT_SECRET` | No | GitHub OAuth App client secret |
+| `OMNIVORE_GITHUB_ORG` | No | GitHub org for admin resolution (org owners = dashboard admins) |
+| `OMNIVORE_STATIC_DIR` | No | Path to static assets (set automatically in Docker) |
 
 ### API Key Authentication
 
@@ -244,13 +248,26 @@ Keys can be **global** (upload to any project) or **project-scoped** (restricted
 
 For CI, store the key as a secret (e.g., `OMNIVORE_API_KEY` in GitHub Actions). See [GitHub Actions Integration](docs/github-actions.md) for examples.
 
+### GitHub OAuth (Optional)
+
+Enable GitHub login by creating a [GitHub OAuth App](https://github.com/settings/developers) and setting `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. When configured:
+
+- Users sign in with GitHub and see a login/logout in the header
+- Global settings and API keys require dashboard admin access
+- Project settings require login
+- Source code fetching uses each user's GitHub token (no shared server token needed)
+- Admin resolution: org owners if `OMNIVORE_GITHUB_ORG` is set, otherwise admin on any linked repo
+
+Without OAuth configured, the dashboard runs fully open (no auth).
+
 ### Source Code Viewing
 
 To see annotated source code in the dashboard:
 
-1. Set `GITHUB_TOKEN` environment variable with a GitHub PAT that has `repo` scope
-2. Configure the project's GitHub repo and source root in the dashboard settings page
-3. Source code is fetched on-demand from GitHub when viewing file coverage — no source is embedded in reports
+1. Configure the project's GitHub repo and source root in the dashboard settings page
+2. Source code is fetched on-demand from GitHub when viewing file coverage — no source is embedded in reports
+3. File paths are resolved automatically using the GitHub Git Trees API (single API call, cached per repo)
+4. Token priority: logged-in user's OAuth token > server `GITHUB_TOKEN` env var > no token (public repos only)
 
 ### Project Settings
 
@@ -263,7 +280,7 @@ curl -X PATCH "http://localhost:3000/api/v1/projects/my-project" \
   -d '{"github_repo": "owner/repo", "source_root": "app/src/main/kotlin"}'
 ```
 
-The `source_root` maps JVM class paths (e.g., `com/example/MyClass.kt`) to repository paths (e.g., `app/src/main/kotlin/com/example/MyClass.kt`).
+The `source_root` helps scope file resolution to a subdirectory when projects live in a monorepo. File paths are resolved automatically via the GitHub Git Trees API — no manual path mapping needed.
 
 ### Hosting
 
@@ -272,6 +289,7 @@ The dashboard is a single binary + SQLite file. Deployment options:
 - **Local development**: `cargo run` with `.env`
 - **Intranet**: Deploy binary behind a reverse proxy (Nginx, Caddy)
 - **Cloud**: Docker container, Fly.io, Railway, or any VPS
+- **NAS**: See [Docker Deployment](docs/docker-deployment.md) for QNAP/Docker Compose setup
 
 ## Features
 
@@ -291,6 +309,9 @@ The dashboard is a single binary + SQLite file. Deployment options:
 - **System health** — uptime, DB size, snapshot count, last ingest at `/health`
 - **Data retention** — configurable full + summary snapshot retention, automatic pruning
 - **Export reports** — Markdown/JSON, single snapshot or two-snapshot comparison
+- **GitHub OAuth** — optional login with role-based access, per-user source fetching, admin resolution
+- **API keys** — global or project-scoped keys for CI upload authentication
+- **Docker support** — multi-stage Dockerfile, Docker Compose, QNAP deployment
 
 ## Documentation
 
@@ -298,6 +319,11 @@ The dashboard is a single binary + SQLite file. Deployment options:
 - [Dashboard Architecture](dashboard/CLAUDE.md)
 - [Publishing Setup](coverage-plugin/PUBLISHING-REQUIRED.md)
 - [CI/CD Integration (GitHub Actions)](.github/workflows/coverage.yml)
+- [GitHub Actions Integration](docs/github-actions.md)
+- [Docker Deployment](docs/docker-deployment.md)
+- [GitHub OAuth Design](docs/github-oauth-design.md)
+- [Feature Tiers](docs/features.md)
+- [Roadmap](docs/roadmap.md)
 
 ## License
 

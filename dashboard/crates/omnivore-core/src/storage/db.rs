@@ -1,6 +1,7 @@
 use crate::model::api_key::{ApiKey, ApiKeyCreated};
 use crate::model::coverage::CoverageSnapshot;
 use crate::model::project::{CreateProject, Project};
+use crate::model::session::Session;
 use crate::model::settings::GlobalSettings;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
@@ -239,6 +240,33 @@ impl Database {
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Sessions table (OAuth)
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                github_username TEXT NOT NULL,
+                github_token TEXT NOT NULL,
+                avatar_url TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Permission cache table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS permission_cache (
+                user_id TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                permission TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, repo)
+            )",
         )
         .execute(&self.pool)
         .await?;
@@ -1015,6 +1043,133 @@ impl Database {
             last_ingest,
             db_size_bytes,
         })
+    }
+
+    // -- Sessions --
+
+    pub async fn create_session(
+        &self,
+        github_username: &str,
+        github_token: &str,
+        avatar_url: Option<&str>,
+    ) -> Result<Session, sqlx::Error> {
+        let id = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let now = Utc::now();
+        let expires_at = now + chrono::Duration::days(7);
+
+        sqlx::query(
+            "INSERT INTO sessions (id, github_username, github_token, avatar_url, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(github_username)
+        .bind(github_token)
+        .bind(avatar_url)
+        .bind(now.to_rfc3339())
+        .bind(expires_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(Session {
+            id,
+            github_username: github_username.to_string(),
+            github_token: github_token.to_string(),
+            avatar_url: avatar_url.map(String::from),
+            created_at: now,
+            expires_at,
+        })
+    }
+
+    pub async fn get_session(&self, session_id: &str) -> Result<Option<Session>, sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        let session = sqlx::query_as!(
+            Session,
+            r#"SELECT id as "id!: String",
+                      github_username as "github_username!: String",
+                      github_token as "github_token!: String",
+                      avatar_url as "avatar_url: String",
+                      created_at as "created_at!: DateTime<Utc>",
+                      expires_at as "expires_at!: DateTime<Utc>"
+               FROM sessions
+               WHERE id = ? AND expires_at > ?"#,
+            session_id,
+            now
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(session)
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM sessions WHERE id = ?")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn prune_expired_sessions(&self) -> Result<(), sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("DELETE FROM sessions WHERE expires_at <= ?")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // -- Permission cache --
+
+    pub async fn get_cached_permission(
+        &self,
+        user_id: &str,
+        repo: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        let perm: Option<String> = sqlx::query_scalar(
+            "SELECT permission FROM permission_cache
+             WHERE user_id = ? AND repo = ? AND expires_at > ?",
+        )
+        .bind(user_id)
+        .bind(repo)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(perm)
+    }
+
+    pub async fn cache_permission(
+        &self,
+        user_id: &str,
+        repo: &str,
+        permission: &str,
+    ) -> Result<(), sqlx::Error> {
+        let expires_at = (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+        sqlx::query(
+            "INSERT OR REPLACE INTO permission_cache (user_id, repo, permission, expires_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(user_id)
+        .bind(repo)
+        .bind(permission)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn prune_permission_cache(&self) -> Result<(), sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("DELETE FROM permission_cache WHERE expires_at <= ?")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

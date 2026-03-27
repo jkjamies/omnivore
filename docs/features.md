@@ -30,9 +30,9 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Dark/light theme toggle | Built |
 | Ingest history / activity log (home + project pages) | Built |
 | Unlimited projects | Built |
-| GitHub OAuth login | Planned |
-| Project permissions from GitHub repo roles | Planned |
-| Per-user source fetching (no shared server token) | Planned |
+| GitHub OAuth login | Built |
+| Project permissions from GitHub repo roles | Built |
+| Per-user source fetching (no shared server token) | Built |
 
 ## Pro
 
@@ -44,7 +44,7 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Export reports — two-snapshot comparison | Built |
 | Dependency graph visualization (D3.js, Gradle projects) | Built |
 | API keys + token-based upload auth | Built |
-| Admin role separation (org-based or repo-based) | Planned |
+| Admin role separation (org-based or repo-based) | Built |
 | Configurable retention limits | Planned |
 | Project favoriting / pinning (server-persisted per-user, tentative) | Planned |
 | PR coverage gates (block merges when coverage drops, via GitHub Action) | Planned |

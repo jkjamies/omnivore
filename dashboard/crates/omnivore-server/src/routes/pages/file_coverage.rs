@@ -2,11 +2,13 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Html;
+use axum_extra::extract::cookie::CookieJar;
 use omnivore_core::model::coverage::FileCoverage;
 use omnivore_core::model::project::Project;
 use omnivore_core::storage::Database;
 
 use super::{fmt_delta_html, fmt_pct_val, html_escape, rate_color_val};
+use crate::routes::auth;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineStatus {
@@ -89,34 +91,6 @@ impl FileCoveragePage {
     }
 }
 
-fn build_source_candidates(source_root: Option<&str>, file_path: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-    let src_dirs = ["src/main/java", "src/main/kotlin"];
-
-    if let Some(root) = source_root {
-        let root = root.trim_end_matches('/');
-
-        if src_dirs.iter().any(|d| root.contains(d)) {
-            candidates.push(format!("{}/{}", root, file_path));
-        }
-
-        let segments: Vec<&str> = file_path.split('/').collect();
-        let mut seen = std::collections::HashSet::new();
-        for seg in &segments {
-            if seen.insert(*seg) {
-                for src_dir in &src_dirs {
-                    candidates.push(format!("{}/{}/{}/{}", root, seg, src_dir, file_path));
-                }
-            }
-        }
-
-        candidates.push(format!("{}/{}", root, file_path));
-    }
-
-    candidates.push(file_path.to_string());
-    candidates
-}
-
 pub async fn file_coverage_page(
     State(db): State<Database>,
     Path((project_id, file_path)): Path<(String, String)>,
@@ -136,6 +110,7 @@ pub async fn file_coverage_page(
 
 pub async fn file_source_fragment(
     State(db): State<Database>,
+    jar: CookieJar,
     Path((project_id, file_path)): Path<(String, String)>,
 ) -> Result<Html<String>, StatusCode> {
     let project = db
@@ -151,24 +126,39 @@ pub async fn file_source_fragment(
         if let Ok(Some(cached)) = db.get_cached_source(repo, &file_path, commit_ref).await {
             file.source_content = Some(cached);
         } else {
-            let token = std::env::var("GITHUB_TOKEN").ok();
-            let candidates = build_source_candidates(
-                project.source_root.as_deref(),
-                &file_path,
-            );
+            // Prefer the logged-in user's GitHub token, fall back to server GITHUB_TOKEN
+            let user = auth::extract_user(&db, &jar).await;
+            let user_token = user.as_ref().map(|u| u.github_token.clone());
+            let env_token = std::env::var("GITHUB_TOKEN").ok();
+            let effective_token = user_token.as_deref().or(env_token.as_deref());
 
-            for candidate in &candidates {
+            if let Some(ref u) = user {
+                tracing::info!(username = %u.username, "Source fetch using logged-in user's token");
+            } else if env_token.is_some() {
+                tracing::info!("Source fetch using server GITHUB_TOKEN");
+            } else {
+                tracing::info!("Source fetch with no token (public repos only)");
+            }
+
+            // Resolve the coverage path to the actual repo path via Git Trees API
+            let resolved = omnivore_core::github::source::resolve_file_path(
+                repo,
+                &file_path,
+                effective_token,
+            )
+            .await;
+
+            if let Some(repo_path) = resolved {
                 let content = omnivore_core::github::source::fetch_source(
                     repo,
-                    candidate,
+                    &repo_path,
                     None,
-                    token.as_deref(),
+                    effective_token,
                 )
                 .await;
                 if let Some(src) = content {
                     let _ = db.cache_source(repo, &file_path, commit_ref, &src).await;
                     file.source_content = Some(src);
-                    break;
                 }
             }
         }

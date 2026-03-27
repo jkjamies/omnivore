@@ -36,7 +36,8 @@ License: **Apache-2.0**
 | tower-http | 0.6 | CORS, tracing middleware |
 | thiserror | 2.x | Error types |
 | askama | 0.15 | HTML templating (Jinja2-style) |
-| reqwest | 0.12 | HTTP client (GitHub API for PR comments) |
+| reqwest | 0.12 | HTTP client (GitHub API for PR comments, OAuth) |
+| axum-extra | 0.10 | Cookie extraction for session management |
 | tracing | 0.1 | Structured logging |
 
 ## API Endpoints
@@ -75,6 +76,10 @@ SQLite with embedded schema creation (no migration files). Connection pool: max 
 - `OMNIVORE_DASHBOARD_URL` — (optional) public URL of this server, used for "View report" links in PR comments
 - `OMNIVORE_RETENTION_FULL` — (optional, default 30) newest N snapshots per project+target keep full file data
 - `OMNIVORE_RETENTION_SUMMARY` — (optional, default 60) next N snapshots kept as summary-only for trend charts
+- `OMNIVORE_STATIC_DIR` — (optional) path to static assets directory; defaults to compile-time path (set in Docker)
+- `GITHUB_CLIENT_ID` — (optional) GitHub OAuth App client ID; enables login/auth
+- `GITHUB_CLIENT_SECRET` — (optional) GitHub OAuth App client secret
+- `OMNIVORE_GITHUB_ORG` — (optional) GitHub org for admin resolution (org owners = dashboard admins)
 
 **Tables:**
 
@@ -89,6 +94,15 @@ coverage_snapshots (
     file_count INT, created_at TEXT, files_json TEXT, dependencies_json TEXT
 )
 -- Index: idx_snapshots_project ON (project_id, created_at DESC)
+
+api_keys (id TEXT PK, name TEXT, key_hash TEXT UNIQUE, key_prefix TEXT,
+          project_id TEXT nullable FK→projects, created_at TEXT, last_used_at TEXT)
+
+sessions (id TEXT PK, github_username TEXT, github_token TEXT,
+          avatar_url TEXT, created_at TEXT, expires_at TEXT)
+
+permission_cache (user_id TEXT, repo TEXT, permission TEXT, expires_at TEXT,
+                  PK (user_id, repo))
 ```
 
 ## Parsers (Multi-Format Ingestion)
@@ -160,8 +174,8 @@ HTMX + Askama 0.15 templates with Chart.js for trend graphs.
 
 All dashboard features belong to a tier. When licensing is implemented, Pro/Enterprise features will be gated at the route/handler level. See [features.md](../docs/features.md) for the authoritative list with build status.
 
-**Community (Free):** Multi-format ingestion, coverage trends, nested file tree, source code view, hotspots, historical deltas, gradient bars, global thresholds, home summary, search/filter, retention settings, single-snapshot export, badges, GitHub Action, project delete, dependency graph, multi-target support, Compose filtering, sparklines, pinning (localStorage), tags/labels, keyboard shortcuts, health dashboard, dark/light theme, activity log, unlimited projects.
+**Community (Free):** Multi-format ingestion, coverage trends, nested file tree, source code view, hotspots, historical deltas, gradient bars, global thresholds, home summary, search/filter, retention settings, single-snapshot export, badges, GitHub Action, project delete, dependency graph, multi-target support, Compose filtering, sparklines, pinning (localStorage), tags/labels, keyboard shortcuts, health dashboard, dark/light theme, activity log, unlimited projects, GitHub OAuth login, project permissions from GitHub repo roles, per-user source fetching.
 
-**Pro:** GitHub PR comments on ingest, per-project threshold override, two-snapshot comparison export, server-persisted pinning (planned), GitHub OAuth (planned), GitHub commit status checks (planned), PR coverage gates (planned), Slack/Discord/webhook notifications (planned), email digests (planned), API keys (planned), diff coverage (planned), AI copy-to-clipboard prompts (planned).
+**Pro:** GitHub PR comments on ingest, per-project threshold override, two-snapshot comparison export, API keys + token-based auth, admin role separation (org-based or repo-based), server-persisted pinning (planned), GitHub commit status checks (planned), PR coverage gates (planned), Slack/Discord/webhook notifications (planned), email digests (planned), diff coverage (planned), AI copy-to-clipboard prompts (planned).
 
 **Enterprise:** SSO/SAML (planned), audit logs (planned), per-project retention (planned), inline AI suggestions (planned), PR-level AI test review (planned), Postgres HA backend (planned), priority support (planned).
