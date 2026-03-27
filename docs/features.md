@@ -33,6 +33,7 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | GitHub OAuth login | Built |
 | Project permissions from GitHub repo roles | Built |
 | Per-user source fetching (no shared server token) | Built |
+| Embeddable SVG trend charts (`/embed/{project_id}/trend`) | Built |
 
 ## Pro
 

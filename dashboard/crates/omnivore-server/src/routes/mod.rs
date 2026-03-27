@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod badge;
 pub mod coverage;
+pub mod embed;
 pub mod export;
 pub mod health;
 pub mod pages;

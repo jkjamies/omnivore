@@ -152,6 +152,7 @@ HTMX + Askama 0.15 templates with Chart.js for trend graphs.
 | `/settings` | `settings.html` | Global thresholds, retention policy, system health link |
 | `/health` | `health.html` | System health: uptime, DB size, snapshot count, last ingest |
 | `/badge/{project_id}` | (SVG) | Shields.io-style coverage badge |
+| `/embed/{project_id}/trend` | (SVG) | Embeddable trend chart (params: limit, metric, target, width, height, theme) |
 
 **Static assets:** `crates/omnivore-server/static/style.css` — responsive, dark/light theme via `prefers-color-scheme` + manual toggle (localStorage `data-theme`). Includes `source-table` styles with `border-collapse:separate`, coverage gutter marks, hit badges, and coverage row backgrounds for the file coverage view.
 

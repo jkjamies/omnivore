@@ -127,6 +127,11 @@ pub fn build_router(db: Database) -> Router {
             "/api/v1/coverage/{project_id}/dependencies",
             routing::get(routes::coverage::get_dependencies),
         )
+        // Embeds
+        .route(
+            "/embed/{project_id}/trend",
+            routing::get(routes::embed::trend_embed),
+        )
         // Badge
         .route(
             "/badge/{project_id}",

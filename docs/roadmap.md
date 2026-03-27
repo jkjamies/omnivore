@@ -5,7 +5,7 @@ See [features.md](features.md) for built features by tier and [future-ideas.md](
 ## Next Up (Free Tier)
 
 - [ ] **Color-coded tags** — user-selectable colors per tag (requires structured tag format)
-- [ ] **Coverage trend embeds** — `/embed/{project_id}/trend` for wikis/Notion
+- [x] **Coverage trend embeds** — `/embed/{project_id}/trend` for wikis/Notion/Obsidian
 
 ## Next Up (Pro Tier)
 
