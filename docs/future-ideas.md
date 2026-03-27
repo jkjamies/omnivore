@@ -104,14 +104,11 @@ Per-project configurable limits. Add `retention_full` and `retention_summary` co
 
 ## Platform
 
-### Authentication (Medium-Large)
-API keys per project, or GitHub OAuth for the dashboard. Session management, middleware, UI.
-
 ### Multi-Tenancy (Large)
-Orgs/teams with access control. Depends on authentication being in place first.
+Orgs/teams with access control beyond GitHub repo roles.
 
 ### GitHub App Integration (Large)
-Replace manual `GITHUB_TOKEN` env var and per-project `github_repo` with a first-class GitHub App (like Codecov, SonarCloud). Benefits: no manual token management, per-repo scoping, auto-discovery of repos, auto-rotating tokens. Requires: OAuth callback endpoints, installation token management, webhook endpoint for installation events, DB tables for installations and repo mappings.
+Replace OAuth App with a first-class GitHub App (like Codecov, SonarCloud). Benefits: no manual token management, per-repo scoping, auto-discovery of repos, auto-rotating tokens. Requires: installation token management, webhook endpoint for installation events, DB tables for installations and repo mappings.
 
 ## AI-Powered Suggestions
 

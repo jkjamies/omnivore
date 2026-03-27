@@ -23,10 +23,14 @@ All configuration is via environment variables:
 | `DATABASE_URL` | `sqlite:omnivore.db?mode=rwc` | SQLite connection string |
 | `BIND_ADDR` | `0.0.0.0:3000` | Server bind address |
 | `RUST_LOG` | `info` | Log level (tracing filter) |
-| `GITHUB_TOKEN` | — | GitHub token for PR comments (optional) |
+| `GITHUB_TOKEN` | — | GitHub token for PR comments and fallback source fetching |
 | `OMNIVORE_DASHBOARD_URL` | — | Public URL for "View report" links in PR comments |
 | `OMNIVORE_RETENTION_FULL` | `30` | Full snapshots to keep per project+target |
 | `OMNIVORE_RETENTION_SUMMARY` | `60` | Summary-only snapshots to keep beyond full |
+| `GITHUB_CLIENT_ID` | — | GitHub OAuth App client ID (enables login) |
+| `GITHUB_CLIENT_SECRET` | — | GitHub OAuth App client secret |
+| `OMNIVORE_GITHUB_ORG` | — | GitHub org for admin resolution (org owners = dashboard admins) |
+| `OMNIVORE_STATIC_DIR` | *(compile-time)* | Path to static assets directory (set in Docker) |
 
 ## API Endpoints
 
@@ -111,9 +115,13 @@ github_repo=owner/repo&pr_number=42&base_branch=main" \
 | `/projects/{id}/files/{path}` | Source code with line-level coverage annotations |
 | `/projects/{id}/settings` | GitHub repo, source root, thresholds, tags |
 | `/projects/{id}/dependencies` | D3.js dependency graph visualization |
-| `/settings` | Global thresholds, retention policy |
+| `/settings` | Global thresholds, retention policy, API keys (admin-only when OAuth enabled) |
 | `/health` | System health (uptime, DB size, snapshots, last ingest) |
 | `/badge/{project_id}` | Shields.io-style SVG coverage badge |
+| `/auth/login` | Redirect to GitHub OAuth (only when configured) |
+| `/auth/callback` | OAuth callback — creates session |
+| `/auth/logout` | Destroy session, clear cookie |
+| `/auth/me` | Auth status + current user info (JSON) |
 
 ## PR Comment Integration
 
@@ -141,20 +149,11 @@ The token needs `pull_requests:write` permission. Provide it either:
 
 ## Deployment
 
-### Docker (example)
+See [Docker Deployment](../docs/docker-deployment.md) for full Docker/Docker Compose/QNAP setup.
 
-```dockerfile
-FROM rust:1.83 AS builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/omnivore-dashboard /usr/local/bin/
-ENV DATABASE_URL="sqlite:/data/omnivore.db?mode=rwc"
-EXPOSE 3000
-CMD ["omnivore-dashboard"]
+```sh
+docker build -t omnivore-dashboard .
+docker run -d -p 3000:3000 -v omnivore-data:/data omnivore-dashboard
 ```
 
 ### Fly.io / Railway / Render
@@ -186,8 +185,8 @@ Omnivore uses a freemium open-core model. All current dashboard features are ava
 
 | Tier | Includes |
 |---|---|
-| **Community (Free)** | All coverage formats, trends, file tree, hotspots, badges, thresholds, export, tags, pinning, activity log, health dashboard, dark/light theme |
-| **Pro** | PR comments, per-project thresholds, two-snapshot export, GitHub OAuth, status checks, coverage gates, notifications, diff coverage, AI prompts |
+| **Community (Free)** | All coverage formats, trends, file tree, hotspots, badges, thresholds, export, tags, pinning, activity log, health dashboard, dark/light theme, GitHub OAuth login, project permissions, per-user source fetching |
+| **Pro** | PR comments, per-project thresholds, two-snapshot export, API keys, admin role separation, status checks, coverage gates, notifications, diff coverage, AI prompts |
 | **Enterprise** | SSO/SAML, audit logs, per-project retention, inline AI, PR-level AI review, Postgres HA, priority support |
 
 ## License
