@@ -34,6 +34,7 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Project permissions from GitHub repo roles | Built |
 | Per-user source fetching (no shared server token) | Built |
 | Embeddable SVG trend charts (`/embed/{project_id}/trend`) | Built |
+| Coverage ratchet (auto-advancing floor per project) | Built |
 
 ## Pro
 

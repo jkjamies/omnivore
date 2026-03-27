@@ -47,9 +47,6 @@ Let teams configure which stats/charts appear on the home page. Drag-and-drop wi
 ### Coverage Trend Alerts (Small — Pro)
 Trigger when coverage trend crosses a threshold — not just on a single ingest, but when the 7-day moving average drops. Smarter than per-ingest notifications, fewer false alarms from one bad commit.
 
-### Coverage Trend Embeds (Small — Free)
-`/embed/{project_id}/trend` — an embeddable iframe-friendly trend chart for wikis, Notion, internal docs. SVG or lightweight HTML, no auth required.
-
 ### Snapshot Annotations / Notes (Small — Pro)
 Attach notes to specific snapshots: "deployed v2.3", "refactored auth module", "intentional coverage drop — removed deprecated code". Context for why coverage changed.
 

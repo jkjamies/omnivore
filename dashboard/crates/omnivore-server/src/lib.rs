@@ -47,6 +47,10 @@ pub fn build_router(db: Database) -> Router {
             routing::post(routes::settings::save_project_tags),
         )
         .route(
+            "/projects/{project_id}/ratchet",
+            routing::post(routes::settings::save_project_ratchet),
+        )
+        .route(
             "/projects/{project_id}/delete",
             routing::post(routes::settings::delete_project),
         )

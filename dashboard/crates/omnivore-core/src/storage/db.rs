@@ -7,6 +7,15 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
+/// Result of the ratchet check performed during ingest.
+#[derive(Debug, Default)]
+pub struct RatchetResult {
+    pub line_floor_violated: bool,
+    pub branch_floor_violated: bool,
+    pub line_floor: Option<f64>,
+    pub branch_floor: Option<f64>,
+}
+
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
@@ -223,6 +232,26 @@ impl Database {
                 .await?;
         }
 
+        // Migration: add ratchet columns to projects if missing
+        let has_ratchet: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'ratchet_enabled'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_ratchet {
+            sqlx::query("ALTER TABLE projects ADD COLUMN ratchet_enabled INTEGER NOT NULL DEFAULT 0")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("ALTER TABLE projects ADD COLUMN ratchet_line_floor REAL")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("ALTER TABLE projects ADD COLUMN ratchet_branch_floor REAL")
+                .execute(&self.pool)
+                .await?;
+        }
+
         // API keys table
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS api_keys (
@@ -318,6 +347,9 @@ impl Database {
                       line_warn_threshold as "line_warn_threshold: f64",
                       branch_warn_threshold as "branch_warn_threshold: f64",
                       tags as "tags: String",
+                      ratchet_enabled as "ratchet_enabled!: bool",
+                      ratchet_line_floor as "ratchet_line_floor: f64",
+                      ratchet_branch_floor as "ratchet_branch_floor: f64",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects WHERE id = ?"#,
@@ -339,6 +371,9 @@ impl Database {
                       line_warn_threshold as "line_warn_threshold: f64",
                       branch_warn_threshold as "branch_warn_threshold: f64",
                       tags as "tags: String",
+                      ratchet_enabled as "ratchet_enabled!: bool",
+                      ratchet_line_floor as "ratchet_line_floor: f64",
+                      ratchet_branch_floor as "ratchet_branch_floor: f64",
                       created_at as "created_at!: DateTime<Utc>",
                       updated_at as "updated_at!: DateTime<Utc>"
                FROM projects ORDER BY name"#
@@ -461,6 +496,54 @@ impl Database {
             .await?;
 
         self.get_project(id).await
+    }
+
+    // -- Ratchet --
+
+    pub async fn update_project_ratchet(
+        &self,
+        id: &str,
+        enabled: bool,
+        line_floor: Option<f64>,
+        branch_floor: Option<f64>,
+    ) -> Result<Option<Project>, sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE projects SET ratchet_enabled = ?, ratchet_line_floor = ?, ratchet_branch_floor = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(enabled)
+        .bind(line_floor)
+        .bind(branch_floor)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_project(id).await
+    }
+
+    /// Advance ratchet floors if new rates are higher. Uses MAX in SQL for atomicity.
+    async fn advance_ratchet_floor(
+        &self,
+        project_id: &str,
+        new_line_rate: f64,
+        new_branch_rate: f64,
+    ) -> Result<(), sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE projects SET
+               ratchet_line_floor = MAX(COALESCE(ratchet_line_floor, 0), ?),
+               ratchet_branch_floor = MAX(COALESCE(ratchet_branch_floor, 0), ?),
+               updated_at = ?
+             WHERE id = ? AND ratchet_enabled = 1",
+        )
+        .bind(new_line_rate)
+        .bind(new_branch_rate)
+        .bind(&now)
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Get recent ingest activity across all projects.
@@ -931,11 +1014,12 @@ impl Database {
     }
 
     /// Auto-create project if it doesn't exist, then insert the snapshot.
+    /// Returns ratchet check results (empty if ratchet not enabled).
     pub async fn ingest_snapshot(
         &self,
         snapshot: &CoverageSnapshot,
         project_name: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<RatchetResult, sqlx::Error> {
         // Ensure project exists
         if self.get_project(&snapshot.project_id).await?.is_none() {
             let input = CreateProject {
@@ -956,11 +1040,42 @@ impl Database {
 
         self.insert_snapshot(snapshot).await?;
 
+        // Ratchet: check floors and advance if improved
+        let project = self.get_project(&snapshot.project_id).await?;
+        let ratchet = if let Some(ref proj) = project {
+            if proj.ratchet_enabled {
+                let line_violated = proj.ratchet_line_floor
+                    .map(|floor| snapshot.line_rate < floor)
+                    .unwrap_or(false);
+                let branch_violated = proj.ratchet_branch_floor
+                    .map(|floor| snapshot.branch_rate < floor)
+                    .unwrap_or(false);
+
+                // Advance floor (only updates if new rate is higher, thanks to MAX in SQL)
+                self.advance_ratchet_floor(
+                    &snapshot.project_id,
+                    snapshot.line_rate,
+                    snapshot.branch_rate,
+                ).await?;
+
+                RatchetResult {
+                    line_floor_violated: line_violated,
+                    branch_floor_violated: branch_violated,
+                    line_floor: proj.ratchet_line_floor,
+                    branch_floor: proj.ratchet_branch_floor,
+                }
+            } else {
+                RatchetResult::default()
+            }
+        } else {
+            RatchetResult::default()
+        };
+
         // Prune old snapshots for this project+target
         let target = &snapshot.target;
         self.prune_snapshots(&snapshot.project_id, target).await?;
 
-        Ok(())
+        Ok(ratchet)
     }
 
     /// Prune old snapshots based on retention limits.

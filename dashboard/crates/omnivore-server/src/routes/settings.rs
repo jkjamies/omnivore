@@ -154,6 +154,19 @@ struct ProjectSettingsPage {
 }
 
 impl ProjectSettingsPage {
+    fn ratchet_enabled(&self) -> bool {
+        self.project.ratchet_enabled
+    }
+    fn ratchet_line_floor_pct(&self) -> String {
+        self.project.ratchet_line_floor
+            .map(|v| format!("{:.1}", v * 100.0))
+            .unwrap_or_default()
+    }
+    fn ratchet_branch_floor_pct(&self) -> String {
+        self.project.ratchet_branch_floor
+            .map(|v| format!("{:.1}", v * 100.0))
+            .unwrap_or_default()
+    }
     fn project_line_pct(&self) -> String {
         self.project.line_threshold.map(|v| format!("{:.0}", v * 100.0)).unwrap_or_default()
     }
@@ -292,6 +305,41 @@ pub async fn save_project_tags(
     });
 
     db.update_project_tags(&project_id, normalized.as_deref())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
+}
+
+// -- Project ratchet --
+
+#[derive(Deserialize)]
+pub struct ProjectRatchetForm {
+    ratchet_enabled: Option<String>,
+    ratchet_line_floor: Option<String>,
+    ratchet_branch_floor: Option<String>,
+}
+
+pub async fn save_project_ratchet(
+    State(db): State<Database>,
+    Path(project_id): Path<String>,
+    Form(form): Form<ProjectRatchetForm>,
+) -> Result<Redirect, StatusCode> {
+    let enabled = form.ratchet_enabled.as_deref() == Some("on");
+
+    let line_floor = form.ratchet_line_floor
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| (v / 100.0).clamp(0.0, 1.0));
+
+    let branch_floor = form.ratchet_branch_floor
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| (v / 100.0).clamp(0.0, 1.0));
+
+    db.update_project_ratchet(&project_id, enabled, line_floor, branch_floor)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

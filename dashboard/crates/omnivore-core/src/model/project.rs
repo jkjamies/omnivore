@@ -23,6 +23,12 @@ pub struct Project {
     pub branch_warn_threshold: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<String>,
+    #[serde(default)]
+    pub ratchet_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratchet_line_floor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratchet_branch_floor: Option<f64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

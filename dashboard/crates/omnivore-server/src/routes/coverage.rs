@@ -138,7 +138,7 @@ pub async fn ingest_coverage(
     }
 
     let project_name = report.project.name.clone();
-    db.ingest_snapshot(&snapshot, Some(&project_name))
+    let ratchet = db.ingest_snapshot(&snapshot, Some(&project_name))
         .await
         .map_err(|e| {
             (
@@ -146,6 +146,24 @@ pub async fn ingest_coverage(
                 format!("Storage error: {e}"),
             )
         })?;
+
+    let mut warnings = Vec::new();
+    if ratchet.line_floor_violated {
+        if let Some(floor) = ratchet.line_floor {
+            warnings.push(format!(
+                "Line coverage {:.1}% is below ratchet floor {:.1}%",
+                snapshot.line_rate * 100.0, floor * 100.0
+            ));
+        }
+    }
+    if ratchet.branch_floor_violated {
+        if let Some(floor) = ratchet.branch_floor {
+            warnings.push(format!(
+                "Branch coverage {:.1}% is below ratchet floor {:.1}%",
+                snapshot.branch_rate * 100.0, floor * 100.0
+            ));
+        }
+    }
 
     // Post PR comment if GitHub params are provided
     if let (Some(repo), Some(pr_number)) = (&params.github_repo, params.pr_number) {
@@ -187,6 +205,7 @@ pub async fn ingest_coverage(
             format: format!("{format:?}"),
             line_rate: snapshot.line_rate,
             branch_rate: snapshot.branch_rate,
+            warnings,
         }),
     ))
 }
@@ -198,6 +217,8 @@ pub struct IngestResponse {
     pub format: String,
     pub line_rate: f64,
     pub branch_rate: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Get the latest coverage snapshot for a project.
