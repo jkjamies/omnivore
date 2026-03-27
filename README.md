@@ -304,6 +304,7 @@ The dashboard is a single binary + SQLite file. Deployment options:
 - **Source code viewing** — on-demand GitHub source fetching with coverage annotations
 - **Configurable thresholds** — global defaults with per-project override, gradient coverage bars
 - **Coverage badges** — shields.io-style SVG badges for READMEs (`/badge/{project_id}`)
+- **Trend embeds** — embeddable SVG trend charts for wikis, Notion, READMEs (`/embed/{project_id}/trend`)
 - **Project management** — tags/labels, pinning/favoriting, search/filter, sparkline trends
 - **Activity log** — recent ingest history on home page and project detail pages
 - **System health** — uptime, DB size, snapshot count, last ingest at `/health`

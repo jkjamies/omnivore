@@ -118,6 +118,7 @@ github_repo=owner/repo&pr_number=42&base_branch=main" \
 | `/settings` | Global thresholds, retention policy, API keys (admin-only when OAuth enabled) |
 | `/health` | System health (uptime, DB size, snapshots, last ingest) |
 | `/badge/{project_id}` | Shields.io-style SVG coverage badge |
+| `/embed/{project_id}/trend` | Embeddable SVG trend chart |
 | `/auth/login` | Redirect to GitHub OAuth (only when configured) |
 | `/auth/callback` | OAuth callback — creates session |
 | `/auth/logout` | Destroy session, clear cookie |
@@ -146,6 +147,63 @@ The dashboard can post coverage summaries as comments on GitHub pull requests. C
 The token needs `pull_requests:write` permission. Provide it either:
 - **Per-request** via `X-GitHub-Token` header (recommended for CI — use `${{ secrets.GITHUB_TOKEN }}`)
 - **Server-wide** via `GITHUB_TOKEN` environment variable
+
+## Badges & Embeds
+
+### Coverage Badge
+
+Shields.io-style SVG badge showing current coverage:
+
+```
+https://your-dashboard.com/badge/{project_id}
+```
+
+**Query params**: `?metric=line|branch` `?target=JvmUnit`
+
+**Usage in Markdown**:
+```markdown
+![Coverage](https://your-dashboard.com/badge/my-project)
+```
+
+**Usage in HTML**:
+```html
+<img src="https://your-dashboard.com/badge/my-project" alt="Coverage">
+```
+
+### Trend Embed
+
+Embeddable SVG trend chart showing coverage over time. Pure SVG — works in Notion, GitHub wikis, READMEs, iframes, anywhere.
+
+```
+https://your-dashboard.com/embed/{project_id}/trend
+```
+
+**Query params**:
+
+| Param | Default | Description |
+|---|---|---|
+| `limit` | `30` | Number of data points |
+| `metric` | `line` | `line` or `branch` |
+| `target` | all | Filter by target (e.g., `JvmUnit`, `AndroidInstrumented`) |
+| `width` | `400` | Width in pixels |
+| `height` | `120` | Height in pixels |
+| `theme` | `light` | `light` or `dark` |
+
+**Usage in Markdown** (GitHub README, wiki):
+```markdown
+![Coverage Trend](https://your-dashboard.com/embed/my-project/trend)
+![Dark Trend](https://your-dashboard.com/embed/my-project/trend?theme=dark&width=600&height=200)
+```
+
+**Usage in HTML / Notion**:
+```html
+<img src="https://your-dashboard.com/embed/my-project/trend?width=600&height=180" alt="Coverage Trend">
+```
+
+**Usage in iframe**:
+```html
+<iframe src="https://your-dashboard.com/embed/my-project/trend?width=800&height=250" width="800" height="250" frameborder="0"></iframe>
+```
 
 ## Deployment
 
