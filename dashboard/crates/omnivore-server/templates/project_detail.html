@@ -60,6 +60,40 @@
 </div>
 {% endif %}
 
+{# -- Ratchet status (only if enabled) -- #}
+{% if ratchet_enabled %}
+<div class="card">
+  <div class="card-header">
+    <h2>Coverage Ratchet</h2>
+    {% if ratchet_line_passed && ratchet_branch_passed %}
+    <span class="badge badge-green">Passing</span>
+    {% else %}
+    <span class="badge badge-red">Below Floor</span>
+    {% endif %}
+  </div>
+  <div class="composite-stats">
+    <div class="composite-stat">
+      <div class="stat-label">Line Floor</div>
+      <div class="stat-value">{{ self.ratchet_line_floor_pct() }}%</div>
+      {% if ratchet_line_passed %}
+      <span class="badge badge-green" style="margin-top:4px;">Passing</span>
+      {% else %}
+      <span class="badge badge-red" style="margin-top:4px;">Below Floor</span>
+      {% endif %}
+    </div>
+    <div class="composite-stat">
+      <div class="stat-label">Branch Floor</div>
+      <div class="stat-value">{{ self.ratchet_branch_floor_pct() }}%</div>
+      {% if ratchet_branch_passed %}
+      <span class="badge badge-green" style="margin-top:4px;">Passing</span>
+      {% else %}
+      <span class="badge badge-red" style="margin-top:4px;">Below Floor</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {# -- Per-target sections -- #}
 {% for t in targets %}
 <div class="card target-card">

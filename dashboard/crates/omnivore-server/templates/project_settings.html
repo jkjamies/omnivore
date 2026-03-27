@@ -93,6 +93,47 @@
 
 <div class="card">
   <div class="card-header">
+    <h2>Coverage Ratchet</h2>
+  </div>
+  <p class="settings-hint">
+    When enabled, the coverage floor automatically advances as coverage improves but never drops.
+    Uploads below the floor receive a warning. You can manually lower the floor below.
+  </p>
+  <form class="settings-form" method="post" action="/projects/{{ project.id }}/ratchet">
+    <div class="settings-field">
+      <label>
+        <input type="checkbox" name="ratchet_enabled" {% if self.ratchet_enabled() %}checked{% endif %}>
+        Enable coverage ratchet
+      </label>
+    </div>
+    <div class="settings-field">
+      <label>Line coverage floor</label>
+      <div class="settings-input-group">
+        <input type="number" name="ratchet_line_floor"
+               value="{{ self.ratchet_line_floor_pct() }}"
+               placeholder="Auto"
+               min="0" max="100" step="0.1">
+        <span class="settings-unit">%</span>
+      </div>
+      <div class="settings-field-hint">Leave empty to auto-set on next upload.</div>
+    </div>
+    <div class="settings-field">
+      <label>Branch coverage floor</label>
+      <div class="settings-input-group">
+        <input type="number" name="ratchet_branch_floor"
+               value="{{ self.ratchet_branch_floor_pct() }}"
+               placeholder="Auto"
+               min="0" max="100" step="0.1">
+        <span class="settings-unit">%</span>
+      </div>
+      <div class="settings-field-hint">Leave empty to auto-set on next upload.</div>
+    </div>
+    <button type="submit" class="btn" style="margin-top:8px;">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">
     <h2>Coverage Badge</h2>
   </div>
   <div class="badge-preview">

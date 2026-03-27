@@ -27,6 +27,11 @@ pub struct ProjectDetailPage {
     composite: Option<CompositeSnapshot>,
     has_dependencies: bool,
     export_snapshots: Vec<ExportSnapshotOption>,
+    ratchet_enabled: bool,
+    ratchet_line_floor: Option<f64>,
+    ratchet_branch_floor: Option<f64>,
+    ratchet_line_passed: bool,
+    ratchet_branch_passed: bool,
     line_threshold: f64,
     branch_threshold: f64,
     line_warn_threshold: f64,
@@ -91,6 +96,12 @@ impl ProjectDetailPage {
             .map(|s| if s.len() > 7 { &s[..7] } else { s })
             .unwrap_or("—")
             .to_string()
+    }
+    fn ratchet_line_floor_pct(&self) -> String {
+        self.ratchet_line_floor.map(|v| format!("{:.1}", v * 100.0)).unwrap_or_else(|| "—".to_string())
+    }
+    fn ratchet_branch_floor_pct(&self) -> String {
+        self.ratchet_branch_floor.map(|v| format!("{:.1}", v * 100.0)).unwrap_or_else(|| "—".to_string())
     }
     fn has_hotspots(&self) -> bool {
         self.targets.iter().any(|t| t.files.iter().any(|f| {
@@ -265,6 +276,17 @@ pub async fn project_detail_page(
 
     let activity = db.get_project_activity(&project_id, 15).await.unwrap_or_default();
 
+    // Ratchet status
+    let ratchet_enabled = project.ratchet_enabled;
+    let ratchet_line_floor = project.ratchet_line_floor;
+    let ratchet_branch_floor = project.ratchet_branch_floor;
+    let ratchet_line_passed = ratchet_line_floor
+        .map(|floor| latest.as_ref().map(|s| s.line_rate >= floor).unwrap_or(true))
+        .unwrap_or(true);
+    let ratchet_branch_passed = ratchet_branch_floor
+        .map(|floor| latest.as_ref().map(|s| s.branch_rate >= floor).unwrap_or(true))
+        .unwrap_or(true);
+
     let page = ProjectDetailPage {
         project,
         latest,
@@ -272,6 +294,11 @@ pub async fn project_detail_page(
         composite,
         has_dependencies,
         export_snapshots,
+        ratchet_enabled,
+        ratchet_line_floor,
+        ratchet_branch_floor,
+        ratchet_line_passed,
+        ratchet_branch_passed,
         line_threshold,
         branch_threshold,
         line_warn_threshold,

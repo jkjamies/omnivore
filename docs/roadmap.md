@@ -6,6 +6,7 @@ See [features.md](features.md) for built features by tier and [future-ideas.md](
 
 - [ ] **Color-coded tags** — user-selectable colors per tag (requires structured tag format)
 - [x] **Coverage trend embeds** — `/embed/{project_id}/trend` for wikis/Notion/Obsidian
+- [x] **Coverage ratchet** — auto-advancing coverage floor per project, warns on regression
 
 ## Next Up (Pro Tier)
 
