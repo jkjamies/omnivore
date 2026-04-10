@@ -27,6 +27,7 @@ class ProbeInserter(
     private val methodDesc: String,
     private val classProbeMap: ClassProbeMap?,
     delegate: MethodVisitor,
+    var isComposable: Boolean = false,
 ) : MethodVisitor(Opcodes.ASM9, delegate) {
 
     private var localProbeCount = 0
@@ -56,7 +57,7 @@ class ProbeInserter(
         localProbeCount++
 
         // Record the mapping for report generation
-        classProbeMap?.addProbe(probeIndex, currentLine, methodName, methodDesc, type)
+        classProbeMap?.addProbe(probeIndex, currentLine, methodName, methodDesc, type, isComposable)
 
         mv.visitFieldInsn(
             Opcodes.GETSTATIC,

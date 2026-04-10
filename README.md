@@ -6,15 +6,53 @@ Omnivore replaces JaCoCo + SonarQube with a purpose-built coverage pipeline: a G
 
 ## Components
 
-| Component | Language | Purpose |
-|---|---|---|
-| [coverage-plugin](coverage-plugin/) | Kotlin | Gradle plugin + JVM agent for bytecode instrumentation |
-| [dashboard](dashboard/) | Rust | REST API, SQLite storage, HTMX frontend, PR comments |
-| [kmp-test-rig](test-rigs/kmp-test-rig/) | Kotlin | Multi-module KMP sample (Clean Architecture + MVI) |
-| [android-test-rig](test-rigs/android-test-rig/) | Kotlin | Android sample with unit + instrumented tests (Clean Architecture + MVI) |
-| [rust-test-rig](test-rigs/rust-test-rig/) | Rust | Rust workspace (native llvm-cov JSON) |
-| [go-test-rig](test-rigs/go-test-rig/) | Go | Go module (native coverprofile) |
-| [python-test-rig](test-rigs/python-test-rig/) | Python | Python package (native coverage.py JSON) |
+Component
+
+Language
+
+Purpose
+
+[coverage-plugin](coverage-plugin/)
+
+Kotlin
+
+Gradle plugin + JVM agent for bytecode instrumentation
+
+[dashboard](dashboard/)
+
+Rust
+
+REST API, SQLite storage, HTMX frontend, PR comments
+
+[kmp-test-rig](test-rigs/kmp-test-rig/)
+
+Kotlin
+
+Multi-module KMP sample (Clean Architecture + MVI)
+
+[android-test-rig](test-rigs/android-test-rig/)
+
+Kotlin
+
+Android sample with unit + instrumented tests (Clean Architecture + MVI)
+
+[rust-test-rig](test-rigs/rust-test-rig/)
+
+Rust
+
+Rust workspace (native llvm-cov JSON)
+
+[go-test-rig](test-rigs/go-test-rig/)
+
+Go
+
+Go module (native coverprofile)
+
+[python-test-rig](test-rigs/python-test-rig/)
+
+Python
+
+Python package (native coverage.py JSON)
 
 ## Quick Start
 
@@ -112,9 +150,10 @@ omnivore {
 ```
 
 Instrumented test coverage requires:
-- An Android emulator or device connected via ADB
-- AGP 8.x+ for build-time bytecode transformation
-- `OmnivoreTestListener` is automatically added to the test runner
+
+-   An Android emulator or device connected via ADB
+-   AGP 8.x+ for build-time bytecode transformation
+-   `OmnivoreTestListener` is automatically added to the test runner
 
 #### Compose Filtering
 
@@ -163,9 +202,10 @@ The `omnivoreReport` task automatically depends on all test tasks, so you don't 
 ```
 
 Reports are generated in `build/reports/omnivore/`:
-- `omnivore-report.json` — machine-readable coverage data
-- `index.html` — visual HTML report
-- `coverage.md` — Markdown summary
+
+-   `omnivore-report.json` — machine-readable coverage data
+-   `index.html` — visual HTML report
+-   `coverage.md` — Markdown summary
 
 ### Non-Gradle Projects
 
@@ -174,26 +214,26 @@ Upload coverage from any language via curl:
 ```sh
 # Rust / Swift (llvm-cov JSON)
 cargo llvm-cov --json > coverage.json
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=llvm-cov&project_id=my-app&project_name=My+App" \
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=llvm-cov&project_id=my-app&project_name=My+App" 
   --data-binary @coverage.json
 
 # Go (native coverprofile)
 go test -coverprofile=coverage.out ./...
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=go&project_id=my-app&project_name=My+App" \
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=go&project_id=my-app&project_name=My+App" 
   --data-binary @coverage.out
 
 # Python (coverage.py JSON)
 python3 -m coverage run -m pytest && python3 -m coverage json
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=python&project_id=my-app&project_name=My+App" \
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=python&project_id=my-app&project_name=My+App" 
   --data-binary @coverage.json
 
 # lcov (C/C++, or any tool with lcov output)
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=lcov&project_id=my-app&project_name=My+App" \
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=lcov&project_id=my-app&project_name=My+App" 
   --data-binary @coverage.lcov
 
 # Omnivore JSON (Kotlin/Android/KMP via plugin)
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage" \
-  -H "Content-Type: application/json" \
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage" 
+  -H "Content-Type: application/json" 
   -d @omnivore-report.json
 ```
 
@@ -201,8 +241,8 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage" \
 
 ### Prerequisites
 
-- Rust toolchain (install via [rustup](https://rustup.rs/))
-- SQLite (bundled via `sqlx`)
+-   Rust toolchain (install via [rustup](https://rustup.rs/))
+-   SQLite (bundled via `sqlx`)
 
 ### Running Locally
 
@@ -221,26 +261,79 @@ The dashboard starts on `http://localhost:3000`. The SQLite database is created 
 
 ### Configuration
 
-| Environment Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | Yes | SQLite connection string |
-| `BIND_ADDR` | No | Listen address (default: `0.0.0.0:3000`) |
-| `GITHUB_TOKEN` | No | GitHub PAT for source code viewing and PR comments |
-| `OMNIVORE_DASHBOARD_URL` | No | Public URL for "View report" links in PR comments |
-| `OMNIVORE_RETENTION_FULL` | No | Full snapshots to keep per project+target (default: 30) |
-| `OMNIVORE_RETENTION_SUMMARY` | No | Summary-only snapshots to keep beyond full (default: 60) |
-| `GITHUB_CLIENT_ID` | No | GitHub OAuth App client ID (enables login) |
-| `GITHUB_CLIENT_SECRET` | No | GitHub OAuth App client secret |
-| `OMNIVORE_GITHUB_ORG` | No | GitHub org for admin resolution (org owners = dashboard admins) |
-| `OMNIVORE_STATIC_DIR` | No | Path to static assets (set automatically in Docker) |
+Environment Variable
+
+Required
+
+Description
+
+`DATABASE_URL`
+
+Yes
+
+SQLite connection string
+
+`BIND_ADDR`
+
+No
+
+Listen address (default: `0.0.0.0:3000`)
+
+`GITHUB_TOKEN`
+
+No
+
+GitHub PAT for source code viewing and PR comments
+
+`OMNIVORE_DASHBOARD_URL`
+
+No
+
+Public URL for "View report" links in PR comments
+
+`OMNIVORE_RETENTION_FULL`
+
+No
+
+Full snapshots to keep per project+target (default: 30)
+
+`OMNIVORE_RETENTION_SUMMARY`
+
+No
+
+Summary-only snapshots to keep beyond full (default: 60)
+
+`GITHUB_CLIENT_ID`
+
+No
+
+GitHub OAuth App client ID (enables login)
+
+`GITHUB_CLIENT_SECRET`
+
+No
+
+GitHub OAuth App client secret
+
+`OMNIVORE_GITHUB_ORG`
+
+No
+
+GitHub org for admin resolution (org owners = dashboard admins)
+
+`OMNIVORE_STATIC_DIR`
+
+No
+
+Path to static assets (set automatically in Docker)
 
 ### API Key Authentication
 
 The ingest endpoint supports optional API key authentication. While no keys exist, the endpoint is open — once you create your first key (via the Settings page), all uploads require a valid `X-API-Key` header:
 
 ```sh
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage" \
-  -H "X-API-Key: omni_your_key_here" \
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage" 
+  -H "X-API-Key: omni_your_key_here" 
   --data-binary @coverage.json
 ```
 
@@ -252,11 +345,11 @@ For CI, store the key as a secret (e.g., `OMNIVORE_API_KEY` in GitHub Actions). 
 
 Enable GitHub login by creating a [GitHub OAuth App](https://github.com/settings/developers) and setting `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. When configured:
 
-- Users sign in with GitHub and see a login/logout in the header
-- Global settings and API keys require dashboard admin access
-- Project settings require login
-- Source code fetching uses each user's GitHub token (no shared server token needed)
-- Admin resolution: org owners if `OMNIVORE_GITHUB_ORG` is set, otherwise admin on any linked repo
+-   Users sign in with GitHub and see a login/logout in the header
+-   Global settings and API keys require dashboard admin access
+-   Project settings require login
+-   Source code fetching uses each user's GitHub token (no shared server token needed)
+-   Admin resolution: org owners if `OMNIVORE_GITHUB_ORG` is set, otherwise admin on any linked repo
 
 Without OAuth configured, the dashboard runs fully open (no auth).
 
@@ -264,10 +357,10 @@ Without OAuth configured, the dashboard runs fully open (no auth).
 
 To see annotated source code in the dashboard:
 
-1. Configure the project's GitHub repo and source root in the dashboard settings page
-2. Source code is fetched on-demand from GitHub when viewing file coverage — no source is embedded in reports
-3. File paths are resolved automatically using the GitHub Git Trees API (single API call, cached per repo)
-4. Token priority: logged-in user's OAuth token > server `GITHUB_TOKEN` env var > no token (public repos only)
+1.  Configure the project's GitHub repo and source root in the dashboard settings page
+2.  Source code is fetched on-demand from GitHub when viewing file coverage — no source is embedded in reports
+3.  File paths are resolved automatically using the GitHub Git Trees API (single API call, cached per repo)
+4.  Token priority: logged-in user's OAuth token > server `GITHUB_TOKEN` env var > no token (public repos only)
 
 ### Project Settings
 
@@ -275,8 +368,8 @@ After uploading coverage, configure project settings via the dashboard UI or API
 
 ```sh
 # Link to GitHub repo + set source root for path mapping
-curl -X PATCH "http://localhost:3000/api/v1/projects/my-project" \
-  -H "Content-Type: application/json" \
+curl -X PATCH "http://localhost:3000/api/v1/projects/my-project" 
+  -H "Content-Type: application/json" 
   -d '{"github_repo": "owner/repo", "source_root": "app/src/main/kotlin"}'
 ```
 
@@ -286,45 +379,45 @@ The `source_root` helps scope file resolution to a subdirectory when projects li
 
 The dashboard is a single binary + SQLite file. Deployment options:
 
-- **Local development**: `cargo run` with `.env`
-- **Intranet**: Deploy binary behind a reverse proxy (Nginx, Caddy)
-- **Cloud**: Docker container, Fly.io, Railway, or any VPS
-- **NAS**: See [Docker Deployment](docs/docker-deployment.md) for QNAP/Docker Compose setup
+-   **Local development**: `cargo run` with `.env`
+-   **Intranet**: Deploy binary behind a reverse proxy (Nginx, Caddy)
+-   **Cloud**: Docker container, Fly.io, Railway, or any VPS
+-   **NAS**: See [Docker Deployment](docs/docker-deployment.md) for QNAP/Docker Compose setup
 
 ## Features
 
-- **Compose-aware** — filters out Compose compiler artifacts (ComposableSingletons, LiveLiterals, lambda groups)
-- **Multi-module** — apply once at root, instruments all subprojects automatically
-- **Separate reporting** — unit and instrumented test coverage shown as independent sections with different thresholds
-- **Android instrumented tests** — build-time bytecode transform via AGP, on-device coverage collection
-- **Multi-format ingestion** — omnivore JSON, llvm-cov, Go coverprofile, Python coverage.py, lcov (auto-detected)
-- **Dependency graph** — resolves and visualizes module dependencies (D3.js force-directed graph)
-- **PR comments** — posts coverage summary with delta to GitHub pull requests
-- **Dashboard** — HTMX frontend with coverage trends (Chart.js), nested file tree, uncovered hotspots, dark/light theme toggle
-- **Source code viewing** — on-demand GitHub source fetching with coverage annotations
-- **Configurable thresholds** — global defaults with per-project override, gradient coverage bars
-- **Coverage badges** — shields.io-style SVG badges for READMEs (`/badge/{project_id}`)
-- **Trend embeds** — embeddable SVG trend charts for wikis, Notion, READMEs (`/embed/{project_id}/trend`)
-- **Project management** — tags/labels, pinning/favoriting, search/filter, sparkline trends
-- **Activity log** — recent ingest history on home page and project detail pages
-- **System health** — uptime, DB size, snapshot count, last ingest at `/health`
-- **Data retention** — configurable full + summary snapshot retention, automatic pruning
-- **Export reports** — Markdown/JSON, single snapshot or two-snapshot comparison
-- **GitHub OAuth** — optional login with role-based access, per-user source fetching, admin resolution
-- **API keys** — global or project-scoped keys for CI upload authentication
-- **Docker support** — multi-stage Dockerfile, Docker Compose, QNAP deployment
+-   **Compose-aware** — filters out Compose compiler artifacts (ComposableSingletons, LiveLiterals, lambda groups)
+-   **Multi-module** — apply once at root, instruments all subprojects automatically
+-   **Separate reporting** — unit and instrumented test coverage shown as independent sections with different thresholds
+-   **Android instrumented tests** — build-time bytecode transform via AGP, on-device coverage collection
+-   **Multi-format ingestion** — omnivore JSON, llvm-cov, Go coverprofile, Python coverage.py, lcov (auto-detected)
+-   **Dependency graph** — resolves and visualizes module dependencies (D3.js force-directed graph)
+-   **PR comments** — posts coverage summary with delta to GitHub pull requests
+-   **Dashboard** — HTMX frontend with coverage trends (Chart.js), nested file tree, uncovered hotspots, dark/light theme toggle
+-   **Source code viewing** — on-demand GitHub source fetching with coverage annotations
+-   **Configurable thresholds** — global defaults with per-project override, gradient coverage bars
+-   **Coverage badges** — shields.io-style SVG badges for READMEs (`/badge/{project_id}`)
+-   **Trend embeds** — embeddable SVG trend charts for wikis, Notion, READMEs (`/embed/{project_id}/trend`)
+-   **Project management** — tags/labels, pinning/favoriting, search/filter, sparkline trends
+-   **Activity log** — recent ingest history on home page and project detail pages
+-   **System health** — uptime, DB size, snapshot count, last ingest at `/health`
+-   **Data retention** — configurable full + summary snapshot retention, automatic pruning
+-   **Export reports** — Markdown/JSON, single snapshot or two-snapshot comparison
+-   **GitHub OAuth** — optional login with role-based access, per-user source fetching, admin resolution
+-   **API keys** — global or project-scoped keys for CI upload authentication
+-   **Docker support** — multi-stage Dockerfile, Docker Compose, QNAP deployment
 
 ## Documentation
 
-- [Gradle Plugin Details](coverage-plugin/CLAUDE.md)
-- [Dashboard Architecture](dashboard/CLAUDE.md)
-- [Publishing Setup](coverage-plugin/PUBLISHING-REQUIRED.md)
-- [CI/CD Integration (GitHub Actions)](.github/workflows/coverage.yml)
-- [GitHub Actions Integration](docs/github-actions.md)
-- [Docker Deployment](docs/docker-deployment.md)
-- [GitHub OAuth Design](docs/github-oauth-design.md)
-- [Feature Tiers](docs/features.md)
-- [Roadmap](docs/roadmap.md)
+-   [Gradle Plugin Details](coverage-plugin/CLAUDE.md)
+-   [Dashboard Architecture](dashboard/CLAUDE.md)
+-   [Publishing Setup](coverage-plugin/PUBLISHING-REQUIRED.md)
+-   [CI/CD Integration (GitHub Actions)](.github/workflows/coverage.yml)
+-   [GitHub Actions Integration](docs/github-actions.md)
+-   [Docker Deployment](docs/docker-deployment.md)
+-   [GitHub OAuth Design](docs/github-oauth-design.md)
+-   [Feature Tiers](docs/features.md)
+-   [Roadmap](docs/roadmap.md)
 
 ## License
 

@@ -20,8 +20,8 @@ object ProbeMapReader {
             input.readFully(magic)
             check(String(magic) == MAGIC) { "Invalid probe map file: bad magic" }
 
-            val version = input.readShort()
-            check(version.toInt() == 1) { "Unsupported version: $version" }
+            val version = input.readShort().toInt()
+            check(version in 1..2) { "Unsupported version: $version" }
 
             val classCount = input.readInt()
 
@@ -39,8 +39,9 @@ object ProbeMapReader {
                     val methodName = input.readUTF()
                     val methodDesc = input.readUTF()
                     val type = ProbeType.entries[input.readByte().toInt()]
+                    val isComposable = if (version >= 2) input.readByte().toInt() == 1 else false
 
-                    classMap.addProbe(probeIndex, lineNumber, methodName, methodDesc, type)
+                    classMap.addProbe(probeIndex, lineNumber, methodName, methodDesc, type, isComposable)
                 }
             }
         }

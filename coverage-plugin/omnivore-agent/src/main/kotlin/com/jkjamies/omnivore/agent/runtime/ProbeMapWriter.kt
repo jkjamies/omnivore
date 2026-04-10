@@ -21,11 +21,12 @@ import java.io.FileOutputStream
  *       methodName: UTF
  *       methodDesc: UTF
  *       type: Byte (0=LINE, 1=BRANCH)
+ *       isComposable: Byte (0=false, 1=true)  [v2+]
  */
 object ProbeMapWriter {
 
     private const val MAGIC = "OMNIPROB"
-    private const val VERSION: Short = 1
+    private const val VERSION: Short = 2
 
     fun write(file: File, probeMap: ProbeMap) {
         file.parentFile?.mkdirs()
@@ -51,6 +52,7 @@ object ProbeMapWriter {
                     out.writeUTF(probe.methodName)
                     out.writeUTF(probe.methodDesc)
                     out.writeByte(probe.type.ordinal)
+                    out.writeByte(if (probe.isComposable) 1 else 0)
                 }
             }
         }
