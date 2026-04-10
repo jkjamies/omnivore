@@ -11,8 +11,11 @@ import com.jkjamies.omnivore.agent.runtime.ExecutionDataReader
 import com.jkjamies.omnivore.agent.runtime.ExecutionDataStore
 import com.jkjamies.omnivore.agent.runtime.ProbeMap
 import com.jkjamies.omnivore.agent.runtime.ProbeMapReader
+import com.jkjamies.omnivore.gradle.GraphFormat
+import com.jkjamies.omnivore.gradle.configuration.DependencyGraphWriter
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
 import org.gradle.internal.logging.text.StyledTextOutput
@@ -69,6 +72,37 @@ abstract class OmnivoreReportTask : DefaultTask() {
     @get:Optional
     abstract val dependenciesIncludeTestDeps: Property<Boolean>
 
+    @get:Input
+    @get:Optional
+    abstract val unitTestExcludes: ListProperty<String>
+
+    @get:Input
+    @get:Optional
+    abstract val instrumentedTestExcludes: ListProperty<String>
+
+    @get:Input
+    @get:Optional
+    abstract val excludeFiles: ListProperty<String>
+
+    @get:Input
+    @get:Optional
+    abstract val excludeMethods: ListProperty<String>
+
+    @get:Input
+    @get:Optional
+    abstract val excludeAnnotations: ListProperty<String>
+
+    @get:Input
+    @get:Optional
+    abstract val localGraphEnabled: Property<Boolean>
+
+    @get:Input
+    @get:Optional
+    abstract val localGraphFormat: Property<String>
+
+    @get:Internal
+    abstract val localGraphOutputFile: Property<java.io.File>
+
     /** Set by the plugin if dependency resolution succeeds. Not a task input. */
     @get:Internal
     var resolvedDependencyGraph: DependencyGraph? = null
@@ -87,6 +121,13 @@ abstract class OmnivoreReportTask : DefaultTask() {
         dependenciesEnabled.convention(false)
         dependenciesIncludeExternal.convention(false)
         dependenciesIncludeTestDeps.convention(false)
+        unitTestExcludes.convention(emptyList())
+        instrumentedTestExcludes.convention(emptyList())
+        excludeFiles.convention(emptyList())
+        excludeMethods.convention(emptyList())
+        excludeAnnotations.convention(emptyList())
+        localGraphEnabled.convention(false)
+        localGraphFormat.convention("MERMAID")
     }
 
     /** A target-specific slice of coverage data. */
@@ -127,11 +168,13 @@ abstract class OmnivoreReportTask : DefaultTask() {
 
         if (unitExecFiles.isNotEmpty() && unitProbeFiles.isNotEmpty()) {
             val (store, probeMap) = mergeData(unitExecFiles, unitProbeFiles)
+            filterProbeMap(probeMap, CoverageTarget.JVM_UNIT)
             targets.add(TargetCoverage(CoverageTarget.JVM_UNIT, CoverageAnalyzer.analyze(store, probeMap)))
         }
 
         if (instrumentedExecFiles.isNotEmpty() && instrumentedProbeFiles.isNotEmpty()) {
             val (store, probeMap) = mergeData(instrumentedExecFiles, instrumentedProbeFiles)
+            filterProbeMap(probeMap, CoverageTarget.ANDROID_INSTRUMENTED)
             targets.add(TargetCoverage(CoverageTarget.ANDROID_INSTRUMENTED, CoverageAnalyzer.analyze(store, probeMap)))
         }
 
@@ -143,20 +186,27 @@ abstract class OmnivoreReportTask : DefaultTask() {
         val outputDir = reportDir.get().asFile
         outputDir.mkdirs()
 
-        // Resolve dependency graph if enabled
-        val depGraph = if (dependenciesEnabled.getOrElse(false)) {
-            try {
-                com.jkjamies.omnivore.gradle.configuration.DependencyGraphResolver.resolve(
-                    project = project,
-                    includeExternal = dependenciesIncludeExternal.getOrElse(false),
-                    includeTestDeps = dependenciesIncludeTestDeps.getOrElse(false),
-                )
-            } catch (e: Exception) {
-                logger.warn("Failed to resolve dependency graph: ${e.message}")
-                null
+        // Use pre-resolved dependency graph (resolved at configuration time to avoid
+        // accessing Project at execution time, which breaks Gradle configuration cache)
+        val depGraph = resolvedDependencyGraph
+
+        // Write local dependency graph file if enabled
+        if (localGraphEnabled.getOrElse(false) && depGraph == null) {
+            logger.warn("Omnivore: Local graph enabled but no dependency graph resolved. Ensure dependencies.enabled is true.")
+        }
+        if (localGraphEnabled.getOrElse(false) && depGraph != null && depGraph.modules.isNotEmpty()) {
+            val format = try {
+                GraphFormat.valueOf(localGraphFormat.getOrElse("MERMAID"))
+            } catch (_: IllegalArgumentException) {
+                GraphFormat.MERMAID
             }
-        } else {
-            resolvedDependencyGraph
+            val graphFile = if (localGraphOutputFile.isPresent) {
+                localGraphOutputFile.get()
+            } else {
+                File(outputDir, "dependency-graph.${DependencyGraphWriter.defaultExtension(format)}")
+            }
+            DependencyGraphWriter.write(graphFile, depGraph, format)
+            logger.lifecycle("Omnivore: Wrote dependency graph to ${graphFile.absolutePath}")
         }
 
         // Generate reports
@@ -227,6 +277,82 @@ abstract class OmnivoreReportTask : DefaultTask() {
             }
         }
         return store to probeMap
+    }
+
+    /**
+     * Filter the probe map before analysis for a specific target:
+     * - For JVM_UNIT: auto-exclude pure Compose classes (all methods @Composable)
+     * - Apply per-target exclude patterns
+     */
+    private fun filterProbeMap(probeMap: ProbeMap, target: CoverageTarget) {
+        val excludePatterns = when (target) {
+            CoverageTarget.JVM_UNIT -> unitTestExcludes.getOrElse(emptyList())
+            CoverageTarget.ANDROID_INSTRUMENTED -> instrumentedTestExcludes.getOrElse(emptyList())
+            else -> emptyList()
+        }
+        val filePatterns = excludeFiles.getOrElse(emptyList())
+        val methodPatterns = excludeMethods.getOrElse(emptyList())
+
+        val toRemove = mutableListOf<Long>()
+        var excludedComposeCount = 0
+
+        for (classMap in probeMap.getAllClassMaps()) {
+            val dotName = classMap.className.replace('/', '.')
+
+            // Auto-exclude pure Compose classes for JVM_UNIT (zero config)
+            if (target == CoverageTarget.JVM_UNIT && classMap.isAllMethodsComposable()) {
+                toRemove.add(classMap.classId)
+                excludedComposeCount++
+                continue
+            }
+
+            // Per-target exclude patterns (class name)
+            if (excludePatterns.any { patternMatches(it, dotName) }) {
+                toRemove.add(classMap.classId)
+                continue
+            }
+
+            // Source file path exclusions
+            val sourceFile = classMap.sourceFile
+            if (sourceFile != null && filePatterns.any { patternMatches(it, sourceFile) }) {
+                toRemove.add(classMap.classId)
+                continue
+            }
+
+            // Method-level exclusions: remove matching probes from the class map
+            if (methodPatterns.isNotEmpty()) {
+                val probesToRemove = classMap.getProbes().filter { probe ->
+                    methodPatterns.any { patternMatches(it, probe.methodName) }
+                }
+                for (probe in probesToRemove) {
+                    classMap.removeProbe(probe.probeIndex)
+                }
+            }
+        }
+
+        for (classId in toRemove) {
+            probeMap.removeClassMap(classId)
+        }
+
+        if (excludedComposeCount > 0) {
+            logger.lifecycle("Omnivore: Auto-excluded $excludedComposeCount pure Compose class(es) from unit test coverage")
+        }
+    }
+
+    private fun patternMatches(pattern: String, text: String): Boolean {
+        return if (pattern.startsWith("regex:")) {
+            Regex(pattern.removePrefix("regex:")).matches(text)
+        } else {
+            globMatches(pattern, text)
+        }
+    }
+
+    private fun globMatches(pattern: String, text: String): Boolean {
+        val regex = pattern
+            .replace(".", "\\.")
+            .replace("*", ".*")
+            .replace("?", ".")
+        return Regex(regex).matches(text)
     }
 
     // -- Pretty output --

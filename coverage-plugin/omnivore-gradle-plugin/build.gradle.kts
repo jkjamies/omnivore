@@ -1,12 +1,14 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    `java-library`
     `java-gradle-plugin`
     `maven-publish`
     signing
+    alias(libs.plugins.gradle.plugin.publish)
 }
 
 dependencies {
-    implementation(project(":omnivore-agent"))
+    api(project(":omnivore-agent"))
 
     // Gradle API is provided by java-gradle-plugin
     compileOnly(libs.agp)
@@ -106,9 +108,10 @@ publishing {
 }
 
 signing {
-    isRequired = !version.toString().endsWith("SNAPSHOT")
+    // Signing is only required for Maven Central (OSSRH), not Gradle Plugin Portal
     val signingKey = providers.environmentVariable("GPG_SIGNING_KEY").orNull
     val signingPassword = providers.environmentVariable("GPG_SIGNING_PASSWORD").orNull
+    isRequired = signingKey != null && signingPassword != null
     if (signingKey != null && signingPassword != null) {
         useInMemoryPgpKeys(signingKey, signingPassword)
     }

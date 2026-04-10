@@ -100,6 +100,11 @@ class OmnivoreClassTransformer(
             return null
         }
 
+        // Check annotation-based exclusion
+        if (hasExcludedAnnotation(classNode.visibleAnnotations, classNode.invisibleAnnotations)) {
+            return null
+        }
+
         // Count total probes needed across all methods
         val totalProbeCount = countProbes(classNode)
         if (totalProbeCount == 0) return null
@@ -176,6 +181,8 @@ class OmnivoreClassTransformer(
             if (KotlinDetector.isSyntheticBridgeMethod(method)) continue
             if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) continue
 
+            val isComposable = ComposeDetector.isComposableMethod(method)
+
             var currentLine = -1
             val seenLines = mutableSetOf<Int>()
             for (insn in method.instructions ?: continue) {
@@ -185,14 +192,14 @@ class OmnivoreClassTransformer(
                         currentLine = line
                         if (seenLines.add(line)) {
                             classProbeMap.addProbe(
-                                probeIndex++, line, name, method.desc ?: "", ProbeType.LINE
+                                probeIndex++, line, name, method.desc ?: "", ProbeType.LINE, isComposable
                             )
                         }
                     }
                     AbstractInsnNode.JUMP_INSN -> {
                         if ((insn as JumpInsnNode).opcode != Opcodes.GOTO) {
                             classProbeMap.addProbe(
-                                probeIndex++, currentLine, name, method.desc ?: "", ProbeType.BRANCH
+                                probeIndex++, currentLine, name, method.desc ?: "", ProbeType.BRANCH, isComposable
                             )
                         }
                     }
@@ -277,12 +284,12 @@ class OmnivoreClassTransformer(
     private fun matchesIncludePatterns(className: String): Boolean {
         if (config.includes.isEmpty()) return true
         val dotName = className.replace('/', '.')
-        return config.includes.any { globMatches(it, dotName) }
+        return config.includes.any { patternMatches(it, dotName) }
     }
 
     private fun matchesExcludePatterns(className: String): Boolean {
         val dotName = className.replace('/', '.')
-        return config.excludes.any { globMatches(it, dotName) }
+        return config.excludes.any { patternMatches(it, dotName) }
     }
 
     private fun globMatches(pattern: String, text: String): Boolean {
@@ -291,6 +298,38 @@ class OmnivoreClassTransformer(
             .replace("*", ".*")
             .replace("?", ".")
         return Regex(regex).matches(text)
+    }
+
+    /**
+     * Match a pattern against text. Supports glob (default) and regex (prefix with "regex:").
+     */
+    private fun patternMatches(pattern: String, text: String): Boolean {
+        return if (pattern.startsWith("regex:")) {
+            Regex(pattern.removePrefix("regex:")).matches(text)
+        } else {
+            globMatches(pattern, text)
+        }
+    }
+
+    /**
+     * Check if any of the annotations match the configured exclude annotation patterns.
+     * Annotation descriptors use the format "Lcom/example/MyAnnotation;" — we convert
+     * to dot-notation for matching.
+     */
+    private fun hasExcludedAnnotation(
+        visibleAnnotations: List<org.objectweb.asm.tree.AnnotationNode>?,
+        invisibleAnnotations: List<org.objectweb.asm.tree.AnnotationNode>?,
+    ): Boolean {
+        if (config.excludeAnnotations.isEmpty()) return false
+        val allAnnotations = (visibleAnnotations.orEmpty() + invisibleAnnotations.orEmpty())
+        return allAnnotations.any { annotation ->
+            val annotationName = annotation.desc
+                ?.removePrefix("L")
+                ?.removeSuffix(";")
+                ?.replace('/', '.')
+                ?: return@any false
+            config.excludeAnnotations.any { pattern -> patternMatches(pattern, annotationName) }
+        }
     }
 
 }

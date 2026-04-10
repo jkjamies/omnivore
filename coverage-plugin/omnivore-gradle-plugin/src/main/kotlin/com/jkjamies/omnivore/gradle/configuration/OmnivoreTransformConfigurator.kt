@@ -138,6 +138,12 @@ object OmnivoreTransformConfigurator {
             excludesProp.javaClass.getMethod("set", Any::class.java)
                 .invoke(excludesProp, extension.excludes.get())
 
+            // Set annotation exclusions
+            val annotationsMethod = params.javaClass.getMethod("getExcludeAnnotations")
+            val annotationsProp = annotationsMethod.invoke(params)
+            annotationsProp.javaClass.getMethod("set", Any::class.java)
+                .invoke(annotationsProp, extension.excludeAnnotations.get())
+
             // Set compose filter (always enabled — zero-cost on non-Compose projects)
             val composeMethod = params.javaClass.getMethod("getComposeFilterEnabled")
             val composeProp = composeMethod.invoke(params)

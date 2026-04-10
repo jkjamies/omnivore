@@ -115,10 +115,10 @@ publishing {
 }
 
 signing {
-    // Sign only when publishing to OSSRH (not for local builds)
-    isRequired = !version.toString().endsWith("SNAPSHOT")
+    // Signing is only required when GPG keys are available (Maven Central / OSSRH)
     val signingKey = providers.environmentVariable("GPG_SIGNING_KEY").orNull
     val signingPassword = providers.environmentVariable("GPG_SIGNING_PASSWORD").orNull
+    isRequired = signingKey != null && signingPassword != null
     if (signingKey != null && signingPassword != null) {
         useInMemoryPgpKeys(signingKey, signingPassword)
     }

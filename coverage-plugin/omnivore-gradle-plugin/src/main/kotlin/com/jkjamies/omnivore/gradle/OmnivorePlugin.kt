@@ -60,6 +60,24 @@ class OmnivorePlugin : Plugin<Project> {
             task.dependenciesIncludeExternal.convention(extension.dependencies.includeExternal.orElse(false))
             task.dependenciesIncludeTestDeps.convention(extension.dependencies.includeTestDeps.orElse(false))
 
+            // Local graph output config
+            task.localGraphEnabled.convention(extension.dependencies.localGraph.enabled.orElse(false))
+            task.localGraphFormat.convention(
+                extension.dependencies.localGraph.format.map { it.name }.orElse("MERMAID")
+            )
+            if (extension.dependencies.localGraph.outputFile.isPresent) {
+                task.localGraphOutputFile.convention(extension.dependencies.localGraph.outputFile)
+            }
+
+            // Per-target exclusion patterns
+            task.unitTestExcludes.convention(extension.unitTests.excludes)
+            task.instrumentedTestExcludes.convention(extension.instrumentedTests.excludes)
+
+            // Advanced exclusion options
+            task.excludeFiles.convention(extension.excludeFiles)
+            task.excludeMethods.convention(extension.excludeMethods)
+            task.excludeAnnotations.convention(extension.excludeAnnotations)
+
             // Depend on all test tasks (this project + subprojects) so coverage data is available
             task.dependsOn(project.tasks.withType(org.gradle.api.tasks.testing.Test::class.java))
             project.subprojects { sub ->
@@ -70,16 +88,39 @@ class OmnivorePlugin : Plugin<Project> {
         // Wire instrumented test task dependencies after evaluation
         project.afterEvaluate {
             reportTask.configure { task ->
-                val allProjects = listOf(project) + project.subprojects
-                for (p in allProjects) {
-                    // Depend on connected Android test tasks so omnivoreReport triggers them
-                    p.tasks.names.filter {
-                        it.startsWith("connected") && it.endsWith("AndroidTest")
-                    }.forEach { name ->
-                        task.dependsOn(p.tasks.named(name))
+                if (extension.instrumentedTests.enabled.getOrElse(false)) {
+                    val allProjects = listOf(project) + project.subprojects
+                    for (p in allProjects) {
+                        // Depend on connected Android test tasks so omnivoreReport triggers them
+                        p.tasks.names.filter {
+                            it.startsWith("connected") && it.endsWith("AndroidTest")
+                        }.forEach { name ->
+                            task.dependsOn(p.tasks.named(name))
+                        }
+                        // Depend on build-time probe map task (writes .probes from AGP transform)
+                        p.tasks.findByName("omnivoreWriteBuildProbeMap")?.let { task.dependsOn(it) }
                     }
-                    // Depend on build-time probe map task (writes .probes from AGP transform)
-                    p.tasks.findByName("omnivoreWriteBuildProbeMap")?.let { task.dependsOn(it) }
+                }
+            }
+        }
+
+        // Resolve dependency graph after ALL projects are evaluated (not just root).
+        // Root afterEvaluate fires before subprojects are evaluated, so configurations
+        // aren't resolvable yet. gradle.projectsEvaluated fires after everything is done.
+        project.gradle.projectsEvaluated {
+            if (extension.dependencies.enabled.getOrElse(false)) {
+                reportTask.configure { task ->
+                    try {
+                        val graph = com.jkjamies.omnivore.gradle.configuration.DependencyGraphResolver.resolve(
+                            project = project,
+                            includeExternal = extension.dependencies.includeExternal.getOrElse(false),
+                            includeTestDeps = extension.dependencies.includeTestDeps.getOrElse(false),
+                        )
+                        task.resolvedDependencyGraph = graph
+                        project.logger.lifecycle("Omnivore: Resolved dependency graph: ${graph.modules.size} modules, ${graph.edges.size} edges")
+                    } catch (e: Exception) {
+                        project.logger.warn("Omnivore: Failed to resolve dependency graph: ${e.message}")
+                    }
                 }
             }
         }
