@@ -25,6 +25,7 @@ import com.jkjamies.omnivore.agent.instrumentation.KotlinDetector
 import com.jkjamies.omnivore.agent.instrumentation.ProbeInserter
 import com.jkjamies.omnivore.agent.runtime.ClassProbeMap
 import com.jkjamies.omnivore.agent.runtime.ProbeType
+import org.objectweb.asm.AnnotationVisitor
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -38,6 +39,10 @@ interface OmnivoreTransformParams : InstrumentationParameters {
     @get:Input
     @get:Optional
     val excludes: ListProperty<String>
+
+    @get:Input
+    @get:Optional
+    val excludeAnnotations: ListProperty<String>
 
     @get:Input
     @get:Optional
@@ -76,11 +81,20 @@ abstract class OmnivoreClassVisitorFactory :
 
         // Check include patterns
         val includes = parameters.get().includes.getOrElse(emptyList())
-        if (includes.isNotEmpty() && !includes.any { globMatches(it, className) }) return false
+        if (includes.isNotEmpty() && !includes.any { patternMatches(it, className) }) return false
 
         // Check exclude patterns
         val excludes = parameters.get().excludes.getOrElse(emptyList())
-        if (excludes.any { globMatches(it, className) }) return false
+        if (excludes.any { patternMatches(it, className) }) return false
+
+        // Check annotation-based exclusions
+        val excludeAnnotations = parameters.get().excludeAnnotations.getOrElse(emptyList())
+        if (excludeAnnotations.isNotEmpty()) {
+            val classAnnotations = classData.classAnnotations
+            if (classAnnotations.any { annotation ->
+                excludeAnnotations.any { pattern -> patternMatches(pattern, annotation) }
+            }) return false
+        }
 
         // Check Compose patterns
         val composeEnabled = parameters.get().composeFilterEnabled.getOrElse(true)
@@ -104,6 +118,7 @@ abstract class OmnivoreClassVisitorFactory :
             composeFilterEnabled = parameters.get().composeFilterEnabled.getOrElse(true),
             includes = parameters.get().includes.getOrElse(emptyList()),
             excludes = parameters.get().excludes.getOrElse(emptyList()),
+            excludeAnnotations = parameters.get().excludeAnnotations.getOrElse(emptyList()),
         )
 
         return OmnivoreInstrumentingVisitor(
@@ -139,6 +154,14 @@ abstract class OmnivoreClassVisitorFactory :
             .replace("*", ".*")
             .replace("?", ".")
         return Regex(regex).matches(text)
+    }
+
+    private fun patternMatches(pattern: String, text: String): Boolean {
+        return if (pattern.startsWith("regex:")) {
+            Regex(pattern.removePrefix("regex:")).matches(text)
+        } else {
+            globMatches(pattern, text)
+        }
     }
 }
 
@@ -214,7 +237,7 @@ private class OmnivoreInstrumentingVisitor(
         val classProbeMap = probeMap?.getOrCreateClassMap(classId, className, sourceFile)
         val currentOffset = globalProbeOffset
         val probeInserter = ProbeInserter(className, currentOffset, name, descriptor, classProbeMap, mv)
-        return ProbeCountingVisitor(probeInserter) { count ->
+        return ComposableDetectingVisitor(probeInserter) { count ->
             globalProbeOffset += count
             totalProbeCount += count
         }
@@ -259,11 +282,27 @@ private class OmnivoreInstrumentingVisitor(
     }
 }
 
-/** Wraps a MethodVisitor to count probes inserted by ProbeInserter. */
-private class ProbeCountingVisitor(
+/**
+ * Wraps a ProbeInserter to count probes and detect @Composable annotations.
+ * When @Composable is detected, sets the flag on the ProbeInserter so probes
+ * are marked as composable in the probe map.
+ */
+private class ComposableDetectingVisitor(
     private val probeInserter: ProbeInserter,
     private val onEnd: (Int) -> Unit,
 ) : MethodVisitor(Opcodes.ASM9, probeInserter) {
+
+    private companion object {
+        const val COMPOSABLE_DESCRIPTOR = "Landroidx/compose/runtime/Composable;"
+    }
+
+    override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
+        if (descriptor == COMPOSABLE_DESCRIPTOR) {
+            probeInserter.isComposable = true
+        }
+        return super.visitAnnotation(descriptor, visible)
+    }
+
     override fun visitEnd() {
         super.visitEnd()
         onEnd(probeInserter.probeCount)

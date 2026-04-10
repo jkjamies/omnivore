@@ -80,7 +80,7 @@ object DependencyGraphResolver {
                 )
             }
 
-            for (config in scanProject.configurations) {
+            for (config in scanProject.configurations.toList()) {
                 val configName = config.name
                 // Match exact names (JVM) or variant-prefixed names (Android: debugRuntimeClasspath, etc.)
                 val isTarget = configName in targetConfigs || targetConfigs.any { base ->
@@ -91,7 +91,8 @@ object DependencyGraphResolver {
 
                 val resolved = try {
                     config.resolvedConfiguration
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    scanProject.logger.info("Omnivore: Failed to resolve config ${scanProject.path}:${configName}: ${e.message}")
                     continue
                 }
 

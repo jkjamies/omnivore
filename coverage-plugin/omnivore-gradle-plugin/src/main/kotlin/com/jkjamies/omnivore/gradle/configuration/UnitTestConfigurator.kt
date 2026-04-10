@@ -32,9 +32,17 @@ object UnitTestConfigurator {
                     if (includes.isNotEmpty()) {
                         append(",includes=${includes.joinToString(":")}")
                     }
-                    val excludes = extension.excludes.get()
-                    if (excludes.isNotEmpty()) {
-                        append(",excludes=${excludes.joinToString(":")}")
+                    val allExcludes = buildList {
+                        addAll(extension.excludes.get())
+                        addAll(extension.unitTests.excludes.getOrElse(emptyList()))
+                        addAll(loadExcludesFile(extension))
+                    }
+                    if (allExcludes.isNotEmpty()) {
+                        append(",excludes=${allExcludes.joinToString(":")}")
+                    }
+                    val excludeAnnotations = extension.excludeAnnotations.get()
+                    if (excludeAnnotations.isNotEmpty()) {
+                        append(",excludeAnnotations=${excludeAnnotations.joinToString(":")}")
                     }
                     append(",compose=true")
                 }
@@ -44,6 +52,18 @@ object UnitTestConfigurator {
                 project.logger.warn("Omnivore: Could not locate omnivore-agent.jar on the plugin classpath.")
             }
         }
+    }
+
+    /**
+     * Load exclusion patterns from an external file if configured.
+     * File format: one pattern per line, lines starting with # are comments, blank lines ignored.
+     */
+    private fun loadExcludesFile(extension: OmnivoreExtension): List<String> {
+        val file = extension.excludesFile.orNull ?: return emptyList()
+        if (!file.isFile) return emptyList()
+        return file.readLines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
     }
 
     /**

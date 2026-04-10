@@ -2,6 +2,7 @@ plugins {
     id("com.android.application") version "8.8.2" apply false
     kotlin("android") version "2.1.10" apply false
     kotlin("jvm") version "2.1.10" apply false
+    kotlin("plugin.compose") version "2.1.10" apply false
     id("io.github.jkjamies.omnivore")
 }
 
@@ -16,6 +17,10 @@ omnivore {
     }
     dependencies {
         enabled.set(true)
+        localGraph {
+            enabled.set(true)
+            format.set(com.jkjamies.omnivore.gradle.GraphFormat.MERMAID)
+        }
     }
     dashboard {
         url.set(providers.gradleProperty("omnivore.dashboard.url").orElse("http://localhost:3000"))

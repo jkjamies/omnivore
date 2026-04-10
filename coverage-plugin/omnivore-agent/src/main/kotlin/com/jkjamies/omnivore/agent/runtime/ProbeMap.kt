@@ -23,6 +23,10 @@ class ProbeMap {
 
     fun getAllClassMaps(): Collection<ClassProbeMap> = entries.values.toList()
 
+    fun removeClassMap(classId: Long) {
+        entries.remove(classId)
+    }
+
     fun isEmpty(): Boolean = entries.isEmpty()
 }
 
@@ -37,8 +41,13 @@ class ClassProbeMap(
     private val probeEntries = mutableListOf<ProbeEntry>()
 
     @Synchronized
-    fun addProbe(probeIndex: Int, lineNumber: Int, methodName: String, methodDesc: String, type: ProbeType) {
-        probeEntries.add(ProbeEntry(probeIndex, lineNumber, methodName, methodDesc, type))
+    fun addProbe(probeIndex: Int, lineNumber: Int, methodName: String, methodDesc: String, type: ProbeType, isComposable: Boolean = false) {
+        probeEntries.add(ProbeEntry(probeIndex, lineNumber, methodName, methodDesc, type, isComposable))
+    }
+
+    @Synchronized
+    fun removeProbe(probeIndex: Int) {
+        probeEntries.removeAll { it.probeIndex == probeIndex }
     }
 
     @Synchronized
@@ -50,6 +59,18 @@ class ClassProbeMap(
     fun getCoveredLineNumbers(): Set<Int> {
         return probeEntries.filter { it.lineNumber > 0 }.map { it.lineNumber }.toSet()
     }
+
+    /**
+     * Returns true if ALL instrumentable methods in this class are @Composable.
+     * Used to auto-exclude pure Compose files from JVM unit test coverage.
+     */
+    fun isAllMethodsComposable(): Boolean {
+        if (probeEntries.isEmpty()) return false
+        val methods = probeEntries.map { it.methodName to it.methodDesc }.toSet()
+        return methods.all { (name, desc) ->
+            probeEntries.any { it.methodName == name && it.methodDesc == desc && it.isComposable }
+        }
+    }
 }
 
 data class ProbeEntry(
@@ -58,6 +79,7 @@ data class ProbeEntry(
     val methodName: String,
     val methodDesc: String,
     val type: ProbeType,
+    val isComposable: Boolean = false,
 )
 
 enum class ProbeType {

@@ -34,12 +34,30 @@ abstract class OmnivoreExtension @Inject constructor(
     val includes: ListProperty<String> = objects.listProperty(String::class.java)
         .convention(emptyList())
 
-    /** Package patterns to exclude from coverage */
+    /** Package patterns to exclude from coverage (glob or regex:pattern) */
     val excludes: ListProperty<String> = objects.listProperty(String::class.java)
         .convention(emptyList())
 
+    /** Annotation class names that exclude a class or method from coverage */
+    val excludeAnnotations: ListProperty<String> = objects.listProperty(String::class.java)
+        .convention(emptyList())
+
+    /** Source file path patterns to exclude from coverage reports */
+    val excludeFiles: ListProperty<String> = objects.listProperty(String::class.java)
+        .convention(emptyList())
+
+    /** Method name patterns to exclude from coverage (glob or regex:pattern) */
+    val excludeMethods: ListProperty<String> = objects.listProperty(String::class.java)
+        .convention(emptyList())
+
+    /** Path to a file containing exclusion patterns (one per line, # for comments) */
+    val excludesFile: Property<java.io.File> = objects.property(java.io.File::class.java)
+
     /** Compose bytecode filter configuration (always enabled; zero-cost on non-Compose projects) */
     val composeFilter: ComposeFilterConfig = objects.newInstance(ComposeFilterConfig::class.java)
+
+    /** Unit test configuration */
+    val unitTests: UnitTestConfig = objects.newInstance(UnitTestConfig::class.java)
 
     /** Instrumented test configuration */
     val instrumentedTests: InstrumentedTestConfig = objects.newInstance(InstrumentedTestConfig::class.java)
@@ -54,6 +72,7 @@ abstract class OmnivoreExtension @Inject constructor(
     val dependencies: DependencyGraphConfig = objects.newInstance(DependencyGraphConfig::class.java)
 
     fun composeFilter(action: Action<ComposeFilterConfig>) = action.execute(composeFilter)
+    fun unitTests(action: Action<UnitTestConfig>) = action.execute(unitTests)
     fun instrumentedTests(action: Action<InstrumentedTestConfig>) = action.execute(instrumentedTests)
     fun reports(action: Action<ReportsConfig>) = action.execute(reports)
     fun dashboard(action: Action<DashboardConfig>) = action.execute(dashboard)
@@ -65,9 +84,17 @@ abstract class ComposeFilterConfig {
     abstract val additionalExcludePatterns: ListProperty<String>
 }
 
+abstract class UnitTestConfig {
+    /** Package patterns to exclude from unit test coverage (in addition to global excludes) */
+    abstract val excludes: ListProperty<String>
+}
+
 abstract class InstrumentedTestConfig {
     /** Enable coverage collection for Android instrumented tests */
     abstract val enabled: Property<Boolean>
+
+    /** Package patterns to exclude from instrumented test coverage (in addition to global excludes) */
+    abstract val excludes: ListProperty<String>
 }
 
 abstract class ReportsConfig @Inject constructor(objects: ObjectFactory) {
@@ -86,7 +113,7 @@ abstract class ReportFormatConfig {
     abstract val enabled: Property<Boolean>
 }
 
-abstract class DependencyGraphConfig {
+abstract class DependencyGraphConfig @Inject constructor(objects: ObjectFactory) {
     /** Enable dependency graph collection in reports */
     abstract val enabled: Property<Boolean>
 
@@ -95,6 +122,29 @@ abstract class DependencyGraphConfig {
 
     /** Include test-scoped dependencies */
     abstract val includeTestDeps: Property<Boolean>
+
+    /** Local file output configuration */
+    val localGraph: LocalGraphConfig = objects.newInstance(LocalGraphConfig::class.java)
+
+    fun localGraph(action: Action<LocalGraphConfig>) = action.execute(localGraph)
+}
+
+/** Output format for the local dependency graph file */
+enum class GraphFormat {
+    DOT,
+    MERMAID,
+    JSON,
+}
+
+abstract class LocalGraphConfig {
+    /** Enable local dependency graph file output */
+    abstract val enabled: Property<Boolean>
+
+    /** Output file path (defaults to build/reports/omnivore/dependency-graph.{ext}) */
+    abstract val outputFile: Property<java.io.File>
+
+    /** Output format: DOT, MERMAID, or JSON */
+    abstract val format: Property<GraphFormat>
 }
 
 abstract class DashboardConfig {

@@ -42,20 +42,13 @@ object InstrumentedTestConfigurator {
     private const val VERSION_PROPS_RESOURCE = "omnivore-version.properties"
 
     fun configure(project: Project, extension: OmnivoreExtension) {
-        // Register AGP build-time transform eagerly (must happen during configuration phase,
-        // not afterEvaluate). This instruments application classes with coverage probes before
-        // they are dexed. The JVM agent detects already-instrumented classes during unit tests
-        // and builds probe maps without re-instrumenting.
-        OmnivoreTransformConfigurator.configure(project, extension)
-
-        // Add runtime dependency eagerly when Android plugin is detected.
-        // AGP resolves configurations during the configuration phase, so dependencies
-        // added in afterEvaluate are silently ignored. The runtime JAR is tiny and
-        // harmless even if instrumentedTests is disabled.
-        addRuntimeDependencyEagerly(project)
-
-        // Test runner args and task registration can wait for afterEvaluate
-        // since they don't affect dependency resolution.
+        // All instrumented test setup (transform, runtime dependency, test runner args)
+        // is deferred to afterEvaluate so we can check instrumentedTests.enabled first.
+        // For projects where enabled=false (the default), nothing happens.
+        //
+        // When enabled=true, we register the AGP transform and add the runtime dependency
+        // inside afterEvaluate. AGP's variant API supports this timing when the Android
+        // plugin is already applied (which it is, since we react via plugins.withId).
         val configureAction = Runnable {
             val enabled = extension.instrumentedTests.enabled.getOrElse(false)
             if (!enabled) return@Runnable
@@ -71,6 +64,13 @@ object InstrumentedTestConfigurator {
                 return@Runnable
             }
 
+            // Register AGP build-time transform
+            OmnivoreTransformConfigurator.configure(project, extension)
+
+            // Add runtime dependency
+            addRuntimeDependency(project)
+
+            // Configure test runner args, probe map task, pull task
             configureAndroidTestInfrastructure(project, extension)
         }
 
@@ -82,25 +82,16 @@ object InstrumentedTestConfigurator {
     }
 
     /**
-     * Add the runtime dependency during configuration phase, before AGP resolves
-     * configurations. Reacts to Android plugin application to trigger at the right time.
+     * Add the runtime dependency. Called from afterEvaluate only when
+     * instrumentedTests.enabled is true and an Android plugin is present.
      */
-    private fun addRuntimeDependencyEagerly(project: Project) {
-        val androidPluginIds = listOf(
-            "com.android.application",
-            "com.android.library",
-            "com.android.dynamic-feature"
-        )
-        for (pluginId in androidPluginIds) {
-            project.plugins.withId(pluginId) {
-                val runtimeJar = resolveRuntimeJar(project)
-                if (runtimeJar != null) {
-                    project.dependencies.add("implementation", project.files(runtimeJar))
-                    project.logger.info("Omnivore: Added runtime dependency to ${project.path}: ${runtimeJar.absolutePath}")
-                } else {
-                    project.logger.warn("Omnivore: Could not resolve omnivore-agent runtime JAR")
-                }
-            }
+    private fun addRuntimeDependency(project: Project) {
+        val runtimeJar = resolveRuntimeJar(project)
+        if (runtimeJar != null) {
+            project.dependencies.add("implementation", project.files(runtimeJar))
+            project.logger.info("Omnivore: Added runtime dependency to ${project.path}: ${runtimeJar.absolutePath}")
+        } else {
+            project.logger.warn("Omnivore: Could not resolve omnivore-agent runtime JAR")
         }
     }
 
@@ -154,9 +145,17 @@ object InstrumentedTestConfigurator {
             if (includes.isNotEmpty()) {
                 args["omnivore.includes"] = includes.joinToString(":")
             }
-            val excludes = extension.excludes.get()
-            if (excludes.isNotEmpty()) {
-                args["omnivore.excludes"] = excludes.joinToString(":")
+            val allExcludes = buildList {
+                addAll(extension.excludes.get())
+                addAll(extension.instrumentedTests.excludes.getOrElse(emptyList()))
+                addAll(loadExcludesFile(extension))
+            }
+            if (allExcludes.isNotEmpty()) {
+                args["omnivore.excludes"] = allExcludes.joinToString(":")
+            }
+            val excludeAnnotations = extension.excludeAnnotations.get()
+            if (excludeAnnotations.isNotEmpty()) {
+                args["omnivore.excludeAnnotations"] = excludeAnnotations.joinToString(":")
             }
 
             // Add our test listener class
@@ -550,9 +549,13 @@ object InstrumentedTestConfigurator {
         } catch (_: Exception) { null } ?: return null
 
         return try {
-            val outputDir = project.layout.buildDirectory.dir("omnivore/runtime").get().asFile
+            // Extract to Gradle's shared cache dir so the JAR survives `clean`
+            val outputDir = File(project.gradle.gradleUserHomeDir, "caches/omnivore/${project.version}")
             outputDir.mkdirs()
             val runtimeJar = File(outputDir, "omnivore-agent-runtime.jar")
+
+            // Skip extraction if already cached
+            if (runtimeJar.isFile) return runtimeJar
 
             java.util.jar.JarOutputStream(runtimeJar.outputStream()).use { jos ->
                 java.util.jar.JarFile(fatJar).use { jf ->
@@ -604,6 +607,14 @@ object InstrumentedTestConfigurator {
         } catch (_: Exception) {
             -1
         }
+    }
+
+    private fun loadExcludesFile(extension: OmnivoreExtension): List<String> {
+        val file = extension.excludesFile.orNull ?: return emptyList()
+        if (!file.isFile) return emptyList()
+        return file.readLines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
     }
 
     private fun loadVersionProperties(): Properties? {
