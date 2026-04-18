@@ -3,7 +3,7 @@ kotlin = "2.3.20"
 asm = "9.9.1"
 kotlinx-serialization = "1.10.0"
 junit5 = "6.0.3"
-agp = "8.8.2"
+agp = "9.1.1"
 
 [libraries]
 asm-core = { module = "org.ow2.asm:asm", version.ref = "asm" }
