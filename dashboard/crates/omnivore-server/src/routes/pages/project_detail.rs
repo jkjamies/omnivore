@@ -57,9 +57,17 @@ impl ProjectDetailPage {
     }
     fn all_trends_json(&self) -> String {
         let datasets: Vec<serde_json::Value> = self.targets.iter().map(|t| {
+            // Include provenance in the chart label so two series that share a
+            // target (e.g. agent vs. Kover JVM_UNIT) stay visually distinct.
+            let label = if t.source_label.is_empty() {
+                t.label.clone()
+            } else {
+                format!("{} ({})", t.label, t.source_label)
+            };
             serde_json::json!({
-                "label": t.label,
+                "label": label,
                 "target": t.target,
+                "source": t.source,
                 "data": t.trend,
             })
         }).collect();
@@ -198,15 +206,15 @@ pub async fn project_detail_page(
         .await
         .unwrap_or(None);
 
-    let target_names = db
-        .get_targets_for_project(&project_id)
+    let series = db
+        .get_series_for_project(&project_id)
         .await
         .unwrap_or_default();
 
     let mut targets = Vec::new();
-    for tname in &target_names {
+    for (tname, sname) in &series {
         let snaps = db
-            .get_snapshots_for_project_by_target(&project_id, tname, 30)
+            .get_snapshots_for_project_by_series(&project_id, tname, sname, 30)
             .await
             .unwrap_or_default();
         if let Some(snap) = snaps.first() {

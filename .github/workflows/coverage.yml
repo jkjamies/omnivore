@@ -27,7 +27,7 @@ jobs:
         run: ./gradlew test omnivoreReport
 
       - name: Upload coverage to dashboard (main branch)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && vars.OMNIVORE_DASHBOARD_URL != ''
         working-directory: test-rigs/kmp-test-rig
         run: |
           curl -s -X POST \
@@ -36,7 +36,7 @@ jobs:
             -d @build/reports/omnivore/omnivore-report.json
 
       - name: Upload coverage with PR comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && vars.OMNIVORE_DASHBOARD_URL != ''
         working-directory: test-rigs/kmp-test-rig
         run: |
           curl -s -X POST \

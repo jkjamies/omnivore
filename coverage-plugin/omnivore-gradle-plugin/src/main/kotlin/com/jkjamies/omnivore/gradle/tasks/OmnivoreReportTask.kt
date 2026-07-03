@@ -209,15 +209,30 @@ abstract class OmnivoreReportTask : DefaultTask() {
             logger.lifecycle("Omnivore: Wrote dependency graph to ${graphFile.absolutePath}")
         }
 
-        // Generate reports
+        // Merge all target data for the combined local HTML/markdown view.
+        val mergedResult = if (targets.size > 1) {
+            val (store, probeMap) = mergeData(allExecFiles, allProbeFiles)
+            CoverageAnalyzer.analyze(store, probeMap)
+        } else {
+            targets.first().result
+        }
+
+        // Generate reports. Each coverage target gets its own omnivore-report.json so
+        // the dashboard tracks it as a separate series (Unit vs. Instrumented) rather
+        // than a single blended number. A single-target run writes
+        //   build/reports/omnivore/omnivore-report.json
+        // a multi-target run writes one per target under a target-named subdirectory:
+        //   build/reports/omnivore/<target>/omnivore-report.json
         val reportFormats = mutableListOf<String>()
         if (jsonEnabled.get()) {
-            // Write one JSON file per target for separate dashboard uploads
             for (tc in targets) {
-                val suffix = tc.target.name.lowercase().replace("_", "-")
-                val jsonFile = File(outputDir, "omnivore-report-$suffix.json")
+                val targetOutputDir = if (targets.size > 1) {
+                    File(outputDir, tc.target.name.lowercase().replace("_", "-")).apply { mkdirs() }
+                } else {
+                    outputDir
+                }
                 JsonReportWriter.write(
-                    outputFile = jsonFile,
+                    outputFile = File(targetOutputDir, "omnivore-report.json"),
                     analysisResult = tc.result,
                     projectId = projectId.get(),
                     projectName = projectName.get(),
@@ -228,13 +243,6 @@ abstract class OmnivoreReportTask : DefaultTask() {
             reportFormats.add("json")
         }
 
-        // For local HTML/markdown, merge all data for a combined view
-        val mergedResult = if (targets.size > 1) {
-            val (store, probeMap) = mergeData(allExecFiles, allProbeFiles)
-            CoverageAnalyzer.analyze(store, probeMap)
-        } else {
-            targets.first().result
-        }
         if (htmlEnabled.get()) {
             val htmlFile = File(outputDir, "index.html")
             HtmlReportWriter.write(htmlFile, mergedResult)

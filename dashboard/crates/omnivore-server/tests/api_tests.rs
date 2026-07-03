@@ -289,6 +289,107 @@ async fn ingest_llvm_cov_auto_detected() {
     assert_eq!(resp["format"], "LlvmCov");
 }
 
+// ── JaCoCo / Kover XML Ingestion ─────────────────────────────────────────
+
+fn sample_jacoco() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
+<report name="kmp-test-rig">
+  <package name="com/example/app">
+    <sourcefile name="Calculator.kt">
+      <line nr="5" mi="0" ci="4" mb="0" cb="0"/>
+      <line nr="6" mi="0" ci="6" mb="1" cb="1"/>
+      <line nr="7" mi="3" ci="0" mb="0" cb="0"/>
+    </sourcefile>
+  </package>
+  <counter type="LINE" missed="1" covered="2"/>
+  <counter type="BRANCH" missed="1" covered="1"/>
+</report>
+"#
+    .to_string()
+}
+
+#[tokio::test]
+async fn ingest_kover_explicit_format() {
+    let db = test_db().await;
+    let req = Request::post("/api/v1/ingest/coverage?format=kover&project_id=kmp-app&project_name=KMP+App")
+        .body(Body::from(sample_jacoco()))
+        .unwrap();
+
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 201);
+
+    let resp = json_body(&body);
+    assert_eq!(resp["project_id"], "kmp-app");
+    assert_eq!(resp["format"], "Kover");
+    // 2/3 lines covered.
+    assert!((resp["line_rate"].as_f64().unwrap() - 2.0 / 3.0).abs() < 1e-6);
+}
+
+#[tokio::test]
+async fn ingest_jacoco_auto_detected_sets_target_and_source() {
+    let db = test_db().await;
+    let req = Request::post("/api/v1/ingest/coverage?project_id=kmp-app")
+        .body(Body::from(sample_jacoco()))
+        .unwrap();
+
+    let (status, body) = send(db.clone(), req).await;
+    assert_eq!(status, 201);
+    assert_eq!(json_body(&body)["format"], "Jacoco");
+
+    // Auto-detected XML defaults to JVM_UNIT and records jacoco provenance.
+    let snap = db.get_latest_snapshot("kmp-app").await.unwrap().unwrap();
+    assert_eq!(snap.target, "JVM_UNIT");
+    assert_eq!(snap.source, "jacoco");
+}
+
+#[tokio::test]
+async fn ingest_kover_target_override() {
+    let db = test_db().await;
+    let req = Request::post("/api/v1/ingest/coverage?format=kover&project_id=kmp-app&target=ANDROID_INSTRUMENTED")
+        .body(Body::from(sample_jacoco()))
+        .unwrap();
+
+    let (status, _) = send(db.clone(), req).await;
+    assert_eq!(status, 201);
+
+    let snap = db.get_latest_snapshot("kmp-app").await.unwrap().unwrap();
+    assert_eq!(snap.target, "ANDROID_INSTRUMENTED");
+    assert_eq!(snap.source, "kover");
+}
+
+#[tokio::test]
+async fn ingest_kover_and_agent_form_separate_series() {
+    let db = test_db().await;
+
+    // Kover import for JVM_UNIT.
+    let req = Request::post("/api/v1/ingest/coverage?format=kover&project_id=dual")
+        .body(Body::from(sample_jacoco()))
+        .unwrap();
+    let (status, _) = send(db.clone(), req).await;
+    assert_eq!(status, 201);
+
+    // Native agent JVM_UNIT for the same project.
+    let omni = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {"id": "dual", "name": "Dual", "target": "JVM_UNIT"},
+        "coverage": {"lineRate": 0.9, "branchRate": 0.8, "linesCovered": 9, "linesTotal": 10, "branchesCovered": 8, "branchesTotal": 10},
+        "files": [{"path": "A.kt", "lineRate": 0.9, "branchRate": 0.8, "lines": [{"lineNumber": 1, "hitCount": 1}]}]
+    }).to_string();
+    let req = Request::post("/api/v1/ingest/coverage?format=omnivore")
+        .header("Content-Type", "application/json")
+        .body(Body::from(omni))
+        .unwrap();
+    let (status, _) = send(db.clone(), req).await;
+    assert_eq!(status, 201);
+
+    // Same target, two sources → two distinct series.
+    let series = db.get_series_for_project("dual").await.unwrap();
+    assert_eq!(series.len(), 2, "expected two (target, source) series, got {series:?}");
+    assert!(series.contains(&("JVM_UNIT".to_string(), "kover".to_string())));
+    assert!(series.contains(&("JVM_UNIT".to_string(), "omnivore-agent".to_string())));
+}
+
 // ── Bad requests ────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -574,7 +675,8 @@ async fn retention_prunes_old_snapshots() {
             project_id: "retention-test".to_string(),
             commit_sha: Some(format!("abc{i}")),
             branch: Some("main".to_string()),
-            target: "JvmUnit".to_string(),
+            target: "JVM_UNIT".to_string(),
+            source: "omnivore-agent".to_string(),
             line_rate: 0.5 + (i as f64 * 0.05),
             branch_rate: 0.4,
             lines_covered: 50 + i,
@@ -587,7 +689,7 @@ async fn retention_prunes_old_snapshots() {
             dependencies_json: None,
         };
         db.insert_snapshot(&snap).await.unwrap();
-        db.prune_snapshots("retention-test", "JvmUnit").await.unwrap();
+        db.prune_snapshots("retention-test", "JVM_UNIT", "omnivore-agent").await.unwrap();
         // Small delay to ensure ordering by created_at
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }

@@ -40,11 +40,13 @@ All configuration is via environment variables:
 POST /api/v1/ingest/coverage
 ```
 
-Universal ingestion endpoint. Accepts omnivore JSON, lcov, llvm-cov, Go coverprofile, and Python coverage.py formats.
+Universal ingestion endpoint. Accepts omnivore JSON, lcov, llvm-cov, Go coverprofile, Python coverage.py, and JaCoCo/Kover XML formats.
 
 **Authentication**: Optional API key via `X-API-Key` header. While no keys exist in the database, the endpoint is open. Once a key is created (Settings page), all uploads require a valid key. Keys can be global or project-scoped.
 
-**Auto-detection**: The format is detected from the content. Override with `?format=omnivore|lcov|llvm-cov|go|python`.
+**Auto-detection**: The format is detected from the content. Override with `?format=omnivore|lcov|llvm-cov|go|python|kover|jacoco`.
+
+**Target & provenance**: Every snapshot records both a `target` (execution environment — `JVM_UNIT`, `ANDROID_INSTRUMENTED`, …) and a `source` (the tool that produced it — `omnivore-agent`, `kover`, `jacoco`, `llvm-cov`, …). Trends and retention are keyed on the `(target, source)` pair, so coverage from different tools for the same target keeps independent history and never mixes. JaCoCo/Kover XML doesn't encode its execution environment, so it defaults to `JVM_UNIT`; override with `?target=` (e.g. `?target=ANDROID_INSTRUMENTED`).
 
 **Omnivore JSON** (from Gradle plugin):
 ```sh
@@ -83,6 +85,16 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?\
 format=llvm-cov&project_id=my-app&project_name=My+App&\
 commit_sha=abc123&branch=main" \
   -d @llvm-cov-export.json
+```
+
+**Kover / JaCoCo XML** (Kotlin, Android, JVM — from `./gradlew koverXmlReport` or a JaCoCo `report.xml`):
+```sh
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?\
+format=kover&project_id=my-app&project_name=My+App&\
+commit_sha=abc123&branch=main" \
+  --data-binary @build/reports/kover/report.xml
+# Use format=jacoco for reports produced directly by JaCoCo.
+# Override the target when the report isn't from JVM unit tests, e.g. &target=ANDROID_INSTRUMENTED
 ```
 
 **With PR comment** (any format):

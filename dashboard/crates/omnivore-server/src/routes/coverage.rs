@@ -4,16 +4,24 @@ use axum::{
     Json,
 };
 use omnivore_core::github;
-use omnivore_core::model::coverage::{CoverageSnapshot, DependencyGraph};
-use omnivore_core::parsers::{go_coverprofile, lcov, llvm_cov, omnivore_json, python_coverage, CoverageFormat};
+use omnivore_core::model::coverage::{CoverageSnapshot, CoverageTarget, DependencyGraph};
+use omnivore_core::parsers::{
+    go_coverprofile, jacoco_xml, lcov, llvm_cov, omnivore_json, python_coverage, CoverageFormat,
+    IngestMeta,
+};
 use omnivore_core::storage::Database;
 use serde::{Deserialize, Serialize};
 
 /// Query parameters for the universal ingest endpoint.
 #[derive(Deserialize, Default)]
 pub struct IngestParams {
-    /// Explicit format: "omnivore", "lcov", "llvm-cov", "go", or "python". Auto-detected if omitted.
+    /// Explicit format: "omnivore", "lcov", "llvm-cov", "go", "python", "kover",
+    /// or "jacoco". Auto-detected from the body if omitted.
     pub format: Option<String>,
+    /// Coverage target override (e.g. "JVM_UNIT", "ANDROID_INSTRUMENTED"). Only
+    /// used by formats that don't encode their own target (JaCoCo/Kover XML);
+    /// defaults to JVM_UNIT there. Ignored by formats with a fixed target.
+    pub target: Option<String>,
     /// Project ID (required for lcov/llvm-cov, ignored for omnivore).
     pub project_id: Option<String>,
     /// Project name (required for lcov/llvm-cov, ignored for omnivore).
@@ -70,9 +78,18 @@ pub async fn ingest_coverage(
 
     let format = match &params.format {
         Some(f) => CoverageFormat::from_str_loose(f)
-            .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Unknown format: {f}. Use omnivore, lcov, llvm-cov, go, or python")))?,
+            .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("Unknown format: {f}. Use omnivore, lcov, llvm-cov, go, python, kover, or jacoco")))?,
         None => CoverageFormat::detect(&body)
             .ok_or_else(|| (StatusCode::BAD_REQUEST, "Could not detect format. Specify ?format= query parameter".into()))?,
+    };
+
+    // Every format that lacks embedded project info reads it from the same query
+    // params, so build the shared metadata once.
+    let meta = IngestMeta {
+        project_id: params.project_id.clone(),
+        project_name: params.project_name.clone(),
+        commit_sha: params.commit_sha.clone(),
+        branch: params.branch.clone(),
     };
 
     let (report, snapshot) = match format {
@@ -81,44 +98,33 @@ pub async fn ingest_coverage(
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid omnivore JSON: {e}")))?
         }
         CoverageFormat::Lcov => {
-            let meta = lcov::LcovMeta {
-                project_id: params.project_id.clone(),
-                project_name: params.project_name.clone(),
-                commit_sha: params.commit_sha.clone(),
-                branch: params.branch.clone(),
-            };
             lcov::parse(&body, &meta)
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid lcov: {e}")))?
         }
         CoverageFormat::LlvmCov => {
-            let meta = llvm_cov::LlvmCovMeta {
-                project_id: params.project_id.clone(),
-                project_name: params.project_name.clone(),
-                commit_sha: params.commit_sha.clone(),
-                branch: params.branch.clone(),
-            };
             llvm_cov::parse(&body, &meta)
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid llvm-cov export: {e}")))?
         }
         CoverageFormat::GoCoverprofile => {
-            let meta = go_coverprofile::GoCoverprofileMeta {
-                project_id: params.project_id.clone(),
-                project_name: params.project_name.clone(),
-                commit_sha: params.commit_sha.clone(),
-                branch: params.branch.clone(),
-            };
             go_coverprofile::parse(&body, &meta)
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid Go coverprofile: {e}")))?
         }
         CoverageFormat::PythonCoverage => {
-            let meta = python_coverage::PythonCoverageMeta {
-                project_id: params.project_id.clone(),
-                project_name: params.project_name.clone(),
-                commit_sha: params.commit_sha.clone(),
-                branch: params.branch.clone(),
-            };
             python_coverage::parse(&body, &meta)
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid Python coverage.py JSON: {e}")))?
+        }
+        CoverageFormat::Jacoco | CoverageFormat::Kover => {
+            // JaCoCo XML doesn't encode its execution environment; default to
+            // JVM unit coverage, overridable via ?target=. Provenance comes from
+            // the format alias (kover vs jacoco).
+            let target = match &params.target {
+                Some(t) => CoverageTarget::from_str_loose(t).ok_or_else(|| {
+                    (StatusCode::BAD_REQUEST, format!("Unknown target: {t}"))
+                })?,
+                None => CoverageTarget::JvmUnit,
+            };
+            jacoco_xml::parse(&body, &meta, target, format.source())
+                .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JaCoCo/Kover XML: {e}")))?
         }
     };
 
