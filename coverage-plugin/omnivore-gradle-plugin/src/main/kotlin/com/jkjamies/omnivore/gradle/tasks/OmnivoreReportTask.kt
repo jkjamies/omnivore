@@ -209,29 +209,37 @@ abstract class OmnivoreReportTask : DefaultTask() {
             logger.lifecycle("Omnivore: Wrote dependency graph to ${graphFile.absolutePath}")
         }
 
-        // Merge all target data into a single combined result. When both unit and
-        // instrumented data are present the report target is COMPOSITE; otherwise it
-        // is the single target that produced data.
+        // Merge all target data for the combined local HTML/markdown view.
         val mergedResult = if (targets.size > 1) {
             val (store, probeMap) = mergeData(allExecFiles, allProbeFiles)
             CoverageAnalyzer.analyze(store, probeMap)
         } else {
             targets.first().result
         }
-        val reportTarget = if (targets.size > 1) CoverageTarget.COMPOSITE else targets.first().target
 
-        // Generate reports — a single omnivore-report.json for the whole run.
+        // Generate reports. Each coverage target gets its own omnivore-report.json so
+        // the dashboard tracks it as a separate series (Unit vs. Instrumented) rather
+        // than a single blended number. A single-target run writes
+        //   build/reports/omnivore/omnivore-report.json
+        // a multi-target run writes one per target under a target-named subdirectory:
+        //   build/reports/omnivore/<target>/omnivore-report.json
         val reportFormats = mutableListOf<String>()
         if (jsonEnabled.get()) {
-            val jsonFile = File(outputDir, "omnivore-report.json")
-            JsonReportWriter.write(
-                outputFile = jsonFile,
-                analysisResult = mergedResult,
-                projectId = projectId.get(),
-                projectName = projectName.get(),
-                target = reportTarget,
-                dependencyGraph = depGraph,
-            )
+            for (tc in targets) {
+                val targetOutputDir = if (targets.size > 1) {
+                    File(outputDir, tc.target.name.lowercase().replace("_", "-")).apply { mkdirs() }
+                } else {
+                    outputDir
+                }
+                JsonReportWriter.write(
+                    outputFile = File(targetOutputDir, "omnivore-report.json"),
+                    analysisResult = tc.result,
+                    projectId = projectId.get(),
+                    projectName = projectName.get(),
+                    target = tc.target,
+                    dependencyGraph = depGraph,
+                )
+            }
             reportFormats.add("json")
         }
 
