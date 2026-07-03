@@ -12,9 +12,8 @@ import java.net.URI
 /**
  * Gradle task that uploads Omnivore coverage reports to the dashboard.
  *
- * Finds all per-target JSON reports produced by [OmnivoreReportTask]
- * (e.g., `omnivore-report-jvm-unit.json`, `omnivore-report-android-instrumented.json`)
- * and POSTs each one to the dashboard's ingestion endpoint.
+ * Finds the `omnivore-report.json` produced by [OmnivoreReportTask] and POSTs
+ * it to the dashboard's ingestion endpoint.
  *
  * Usage: `./gradlew omnivoreUpload`
  */
@@ -42,7 +41,7 @@ abstract class OmnivoreUploadTask : DefaultTask() {
         val dir = reportDir.get().asFile
 
         val reportFiles = dir.listFiles()
-            ?.filter { it.name.startsWith("omnivore-report-") && it.extension == "json" }
+            ?.filter { it.name == "omnivore-report.json" }
             ?.sorted()
             ?: emptyList()
 
