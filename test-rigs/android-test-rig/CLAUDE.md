@@ -18,6 +18,30 @@ Reports generated in `build/reports/omnivore/`:
 - `index.html` — visual HTML report
 - `coverage.md` — Markdown summary
 
+### JaCoCo (opt-in second coverage source)
+
+The `:app` module can also emit a JaCoCo XML report via AGP's bundled JaCoCo —
+a convenient way to exercise the dashboard's JaCoCo/Kover ingestion path with a
+real Android tool. It is **opt-in** via the `omnivore.jacoco` property, kept off
+by default because AGP's unit-test coverage instruments the same tests the
+Omnivore agent already covers during `omnivoreReport`; running one at a time
+avoids interference. (The KMP rig has the equivalent wired up with Kover.)
+
+```sh
+# Generate a JaCoCo XML report for the app module's unit tests
+./gradlew :app:createDebugUnitTestCoverageReport -Pomnivore.jacoco
+# → app/build/reports/coverage/test/debug/report.xml  (path may vary by AGP version;
+#   otherwise: find app/build -name 'report.xml' -path '*coverage*')
+
+# Ingest it — recorded as target=JVM_UNIT, source=jacoco (a separate series from
+# the omnivore-agent report, so both trend independently on the dashboard)
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=jacoco&project_id=android-test-rig&project_name=Android+Test+Rig" \
+  --data-binary @app/build/reports/coverage/test/debug/report.xml
+```
+
+Without `-Pomnivore.jacoco`, unit-test coverage stays disabled and the standard
+`omnivoreReport` flow (and CI) is completely unaffected.
+
 ## Modules
 
 ```

@@ -109,6 +109,11 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=python&project
 cd test-rigs/kmp-test-rig && ./gradlew koverXmlReport -Pomnivore.kover   # → build/reports/kover/report.xml
 curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=kover&project_id=kmp-test-rig&project_name=KMP+Test+Rig" \
   --data-binary @build/reports/kover/report.xml
+
+# 8. Or JaCoCo from the Android rig (AGP's bundled JaCoCo, opt-in -Pomnivore.jacoco)
+cd test-rigs/android-test-rig && ./gradlew :app:createDebugUnitTestCoverageReport -Pomnivore.jacoco
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=jacoco&project_id=android-test-rig&project_name=Android+Test+Rig" \
+  --data-binary @app/build/reports/coverage/test/debug/report.xml
 ```
 
 ## Conventions
