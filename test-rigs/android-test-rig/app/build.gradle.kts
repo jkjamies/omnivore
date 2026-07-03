@@ -4,6 +4,17 @@ plugins {
     kotlin("plugin.compose")
 }
 
+// AGP bundles JaCoCo. Enabling unit-test coverage on the debug variant makes
+// `createDebugUnitTestCoverageReport` emit a JaCoCo-compatible XML report — a
+// convenient way to exercise the dashboard's JaCoCo ingestion path. It is
+// OPT-IN via `-Pomnivore.jacoco` and off by default: it instruments the same
+// unit tests the Omnivore agent already covers during `omnivoreReport`, so
+// enabling it only on request keeps the two off each other (and leaves CI
+// untouched). Enable with:
+//   ./gradlew :app:createDebugUnitTestCoverageReport -Pomnivore.jacoco
+//   → app/build/reports/coverage/test/debug/report.xml
+val jacocoEnabled = providers.gradleProperty("omnivore.jacoco").isPresent
+
 android {
     namespace = "com.example.android.testrig"
     compileSdk = 35
@@ -29,6 +40,13 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    buildTypes {
+        debug {
+            // Off unless -Pomnivore.jacoco is passed (see note at top of file).
+            enableUnitTestCoverage = jacocoEnabled
+        }
     }
 }
 

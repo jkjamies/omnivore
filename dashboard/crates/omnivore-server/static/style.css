@@ -353,6 +353,14 @@ tr:hover td { background: var(--bg-hover); }
   font-family: var(--mono);
   font-size: 11px;
 }
+/* Provenance badge — which tool produced a coverage series (e.g. Kover). */
+.badge-source {
+  background: rgba(67,97,238,0.10);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
 
 /* File breakdown collapsible */
 .file-breakdown {

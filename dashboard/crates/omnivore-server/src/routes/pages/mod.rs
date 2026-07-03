@@ -28,10 +28,15 @@ pub struct FileTreeNode {
     pub branch_delta: Option<f64>,
 }
 
-/// Summary data for a single coverage target.
+/// Summary data for a single coverage series (a `target` measured by a `source`).
 pub struct TargetSnapshot {
     pub target: String,
     pub label: String,
+    /// Provenance — which tool produced this series (e.g. "kover").
+    pub source: String,
+    /// Human-friendly provenance label for the badge (e.g. "Kover"); empty for
+    /// the native agent, which needs no attribution.
+    pub source_label: String,
     pub line_rate: f64,
     pub branch_rate: f64,
     pub lines_covered: i64,
@@ -72,6 +77,8 @@ impl TargetSnapshot {
         Self {
             target: snap.target.clone(),
             label: target_label(&snap.target),
+            source: snap.source.clone(),
+            source_label: source_label(&snap.source),
             line_rate: snap.line_rate,
             branch_rate: snap.branch_rate,
             lines_covered: snap.lines_covered,
@@ -169,6 +176,21 @@ fn target_label(target: &str) -> String {
         "GO_COVER" | "GoCover" => "Go".to_string(),
         "PYTHON_COVERAGE" | "PythonCoverage" => "Python".to_string(),
         "LCOV" | "Lcov" => "lcov".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Human-friendly provenance label for a `source`. Returns an empty string for
+/// the native Omnivore agent (which is the implicit default and needs no badge).
+fn source_label(source: &str) -> String {
+    match source {
+        "omnivore-agent" | "" => String::new(),
+        "kover" => "Kover".to_string(),
+        "jacoco" => "JaCoCo".to_string(),
+        "llvm-cov" => "llvm-cov".to_string(),
+        "lcov" => "lcov".to_string(),
+        "go" => "Go".to_string(),
+        "python-coverage" => "coverage.py".to_string(),
         other => other.to_string(),
     }
 }

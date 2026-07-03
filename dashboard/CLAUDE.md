@@ -48,7 +48,7 @@ License: **Apache-2.0**
 | GET | `/api/v1/projects` | List all projects |
 | POST | `/api/v1/projects` | Create project (body: `{id, name, description?, github_repo?}`) |
 | PATCH | `/api/v1/projects/{project_id}` | Update project settings (body: `{github_repo?}`) |
-| POST | `/api/v1/ingest/coverage` | Universal ingest — omnivore JSON, lcov, llvm-cov, Go coverprofile, or Python coverage.py (auto-detects or `?format=`) |
+| POST | `/api/v1/ingest/coverage` | Universal ingest — omnivore JSON, lcov, llvm-cov, Go coverprofile, Python coverage.py, or JaCoCo/Kover XML (auto-detects or `?format=`; JaCoCo/Kover accept `?target=` override) |
 | GET | `/api/v1/coverage/{project_id}/latest` | Latest snapshot for project |
 | GET | `/api/v1/coverage/{project_id}/trend?limit=30` | Coverage trend (TrendPoints) |
 | GET | `/api/v1/coverage/{project_id}/dependencies` | Dependency graph from latest snapshot |
@@ -89,10 +89,12 @@ projects (id TEXT PK, name TEXT, description TEXT, github_repo TEXT, source_root
 
 coverage_snapshots (
     id TEXT PK, project_id TEXT FK→projects, commit_sha TEXT, branch TEXT,
-    target TEXT, line_rate REAL, branch_rate REAL,
+    target TEXT, source TEXT NOT NULL DEFAULT 'omnivore-agent',
+    line_rate REAL, branch_rate REAL,
     lines_covered INT, lines_total INT, branches_covered INT, branches_total INT,
     file_count INT, created_at TEXT, files_json TEXT, dependencies_json TEXT
 )
+-- source = provenance (which tool produced the data); trends + retention are keyed on (project_id, target, source)
 -- Index: idx_snapshots_project ON (project_id, created_at DESC)
 
 api_keys (id TEXT PK, name TEXT, key_hash TEXT UNIQUE, key_prefix TEXT,
@@ -116,10 +118,13 @@ All parsers normalize to `(OmnivoreReport, CoverageSnapshot)` — a common model
 | llvm-cov | `parsers::llvm_cov` | `llvm-cov export --format=json` | Rust (`cargo llvm-cov`), Swift/Xcode |
 | Go coverprofile | `parsers::go_coverprofile` | `go test -coverprofile` output | Go projects (native format, no conversion) |
 | Python coverage.py | `parsers::python_coverage` | `coverage json` output | Python projects (native format, no conversion) |
+| JaCoCo/Kover XML | `parsers::jacoco_xml` | JaCoCo `report.xml` / Kover `koverXmlReport` | Kotlin/Android/JVM projects using JaCoCo or Kover instead of the Omnivore agent |
 
-For lcov, llvm-cov, Go coverprofile, and Python coverage.py, project metadata (id, name, commit, branch) is supplied via `LcovMeta`/`LlvmCovMeta`/`GoCoverprofileMeta`/`PythonCoverageMeta` structs (mapped from query params in the API).
+For every format except omnivore JSON, project metadata (id, name, commit, branch) is supplied via the shared `parsers::IngestMeta` struct (mapped from query params in the API). Each parser normalizes through `CoverageSnapshot::from_report`, which persists the `target` in canonical `SCREAMING_SNAKE_CASE` and records the `source` (provenance).
 
-Format auto-detection: JSON starting with `"format":"omnivore"` → Omnivore; `"type":"llvm.coverage"` → llvm-cov; `"executed_lines"` + `"num_statements"` → Python coverage.py; lines starting with `TN:` or `SF:` → lcov; lines starting with `mode:` → Go coverprofile.
+**Target vs. source:** `target` is the execution environment (`JVM_UNIT`, `ANDROID_INSTRUMENTED`, …); `source` is the tool that produced the data (`omnivore-agent`, `kover`, `jacoco`, `llvm-cov`, `lcov`, `go`, `python-coverage`). They are stored as separate columns and the dashboard keys trends + retention on the `(target, source)` pair, so two tools measuring the same target render as two independent series. JaCoCo/Kover XML defaults its target to `JVM_UNIT` (overridable via `?target=`); the `source` is `kover` or `jacoco` per the format alias used.
+
+Format auto-detection: JSON starting with `"format":"omnivore"` → Omnivore; `"type":"llvm.coverage"` → llvm-cov; `"executed_lines"` + `"num_statements"` → Python coverage.py; lines starting with `TN:` or `SF:` → lcov; lines starting with `mode:` → Go coverprofile; XML with a `<report>` root or JaCoCo DTD → JaCoCo (auto-detect can't distinguish Kover, so pass `?format=kover` to attribute provenance to Kover). JaCoCo/Kover XML strips the XML declaration and DOCTYPE before parsing (no DTD/entity resolution — not exposed to XXE).
 
 ## Architecture
 
@@ -128,6 +133,7 @@ Format auto-detection: JSON starting with `"format":"omnivore"` → Omnivore; `"
 - `omnivore-core::parsers::llvm_cov::parse()` — parses llvm-cov export JSON (segments → per-line coverage)
 - `omnivore-core::parsers::go_coverprofile::parse()` — parses Go coverprofile (block ranges → per-line coverage)
 - `omnivore-core::parsers::python_coverage::parse()` — parses Python coverage.py JSON (executed/missing lines)
+- `omnivore-core::parsers::jacoco_xml::parse()` — parses JaCoCo/Kover XML (`<sourcefile><line nr ci mi cb mb>` → per-line coverage; `hit_count` carries `ci`, covered instructions)
 - `omnivore-core::github::generate_comment()` — generates Markdown PR comment with delta comparison
 - `omnivore-core::github::GitHubClient` — posts/updates PR comments via GitHub REST API
 - `omnivore-core::github::source::fetch_source()` — fetches file source code on-demand from GitHub API (used by file coverage page)
@@ -169,7 +175,7 @@ HTMX + Askama 0.15 templates with Chart.js for trend graphs.
 - Project tags/labels with tag filter bar
 - Ingest activity log on home page and project detail pages
 
-**Coverage targets:** `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`, `RUST_LLVM_COV`, `GO_COVER`, `PYTHON_COVERAGE`, `LCOV` — each parser sets the appropriate target automatically.
+**Coverage targets:** `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`, `RUST_LLVM_COV`, `GO_COVER`, `PYTHON_COVERAGE`, `LCOV` — each parser sets the appropriate target automatically (JaCoCo/Kover default to `JVM_UNIT`, overridable via `?target=`). Orthogonal to target is **source** (provenance): `omnivore-agent`, `kover`, `jacoco`, `llvm-cov`, `lcov`, `go`, `python-coverage`. The `(target, source)` pair is the unit the dashboard trends and prunes on.
 
 ## Feature Tiers
 
