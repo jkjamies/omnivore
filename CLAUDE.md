@@ -103,9 +103,11 @@ cd test-rigs/python-test-rig && python3 -m coverage run -m pytest tests/ && pyth
 curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=python&project_id=python-test-rig&project_name=Python+Test+Rig" \
   --data-binary @coverage.json
 
-# 7. Or ingest a Kover/JaCoCo XML report (for projects using Kover/JaCoCo instead of the agent)
-./gradlew koverXmlReport   # produces build/reports/kover/report.xml
-curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=kover&project_id=my-app&project_name=My+App" \
+# 7. Or ingest a Kover/JaCoCo XML report. The KMP rig has Kover wired up as an
+#    opt-in second coverage source (-Pomnivore.kover), so the same project gets
+#    two JVM_UNIT series: omnivore-agent + kover.
+cd test-rigs/kmp-test-rig && ./gradlew koverXmlReport -Pomnivore.kover   # → build/reports/kover/report.xml
+curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=kover&project_id=kmp-test-rig&project_name=KMP+Test+Rig" \
   --data-binary @build/reports/kover/report.xml
 ```
 
