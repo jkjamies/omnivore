@@ -30,23 +30,20 @@ jobs:
         if: github.ref == 'refs/heads/main' && vars.OMNIVORE_DASHBOARD_URL != ''
         working-directory: test-rigs/kmp-test-rig
         run: |
-          # The plugin writes one target-suffixed report (e.g. omnivore-report-jvm-unit.json).
-          report=$(ls build/reports/omnivore/omnivore-report-*.json | head -n1)
           curl -s -X POST \
             "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage" \
             -H "Content-Type: application/json" \
-            -d @"$report"
+            -d @build/reports/omnivore/omnivore-report.json
 
       - name: Upload coverage with PR comment
         if: github.event_name == 'pull_request' && vars.OMNIVORE_DASHBOARD_URL != ''
         working-directory: test-rigs/kmp-test-rig
         run: |
-          report=$(ls build/reports/omnivore/omnivore-report-*.json | head -n1)
           curl -s -X POST \
             "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}&base_branch=main" \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
-            -d @"$report"
+            -d @build/reports/omnivore/omnivore-report.json
 
       - name: Upload coverage report artifact
         if: always()

@@ -209,32 +209,32 @@ abstract class OmnivoreReportTask : DefaultTask() {
             logger.lifecycle("Omnivore: Wrote dependency graph to ${graphFile.absolutePath}")
         }
 
-        // Generate reports
-        val reportFormats = mutableListOf<String>()
-        if (jsonEnabled.get()) {
-            // Write one JSON file per target for separate dashboard uploads
-            for (tc in targets) {
-                val suffix = tc.target.name.lowercase().replace("_", "-")
-                val jsonFile = File(outputDir, "omnivore-report-$suffix.json")
-                JsonReportWriter.write(
-                    outputFile = jsonFile,
-                    analysisResult = tc.result,
-                    projectId = projectId.get(),
-                    projectName = projectName.get(),
-                    target = tc.target,
-                    dependencyGraph = depGraph,
-                )
-            }
-            reportFormats.add("json")
-        }
-
-        // For local HTML/markdown, merge all data for a combined view
+        // Merge all target data into a single combined result. When both unit and
+        // instrumented data are present the report target is COMPOSITE; otherwise it
+        // is the single target that produced data.
         val mergedResult = if (targets.size > 1) {
             val (store, probeMap) = mergeData(allExecFiles, allProbeFiles)
             CoverageAnalyzer.analyze(store, probeMap)
         } else {
             targets.first().result
         }
+        val reportTarget = if (targets.size > 1) CoverageTarget.COMPOSITE else targets.first().target
+
+        // Generate reports — a single omnivore-report.json for the whole run.
+        val reportFormats = mutableListOf<String>()
+        if (jsonEnabled.get()) {
+            val jsonFile = File(outputDir, "omnivore-report.json")
+            JsonReportWriter.write(
+                outputFile = jsonFile,
+                analysisResult = mergedResult,
+                projectId = projectId.get(),
+                projectName = projectName.get(),
+                target = reportTarget,
+                dependencyGraph = depGraph,
+            )
+            reportFormats.add("json")
+        }
+
         if (htmlEnabled.get()) {
             val htmlFile = File(outputDir, "index.html")
             HtmlReportWriter.write(htmlFile, mergedResult)
