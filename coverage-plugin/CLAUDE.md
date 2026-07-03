@@ -97,9 +97,9 @@ omnivore {
 
 **OmnivoreClassVisitorFactory** (`com.jkjamies.omnivore.gradle.transform`): AGP `AsmClassVisitorFactory` that applies probe instrumentation at build time (Android has no `-javaagent` support).
 
-**OmnivoreReportTask:** Scans `build/omnivore/` for `.omnivore` + `.probes` files (from both unit and instrumented tests), merges, analyzes, writes reports to `build/reports/omnivore/`. Auto-detects coverage target: `COMPOSITE` if both unit and instrumented data present, `ANDROID_INSTRUMENTED` if only instrumented, `JVM_UNIT` otherwise.
+**OmnivoreReportTask:** Scans `build/omnivore/` for `.omnivore` + `.probes` files (from both unit and instrumented tests), analyzes each target (`JVM_UNIT`, `ANDROID_INSTRUMENTED`) independently, and writes one `omnivore-report.json` per target to `build/reports/omnivore/` — top-level for a single target, or under a target-named subdirectory (`jvm-unit/`, `android-instrumented/`) when multiple targets are present, so each uploads as its own dashboard series. Local `index.html`/`coverage.md` use a merged combined view.
 
-**OmnivoreUploadTask:** POSTs `omnivore-report.json` to the dashboard's ingestion endpoint.
+**OmnivoreUploadTask:** Walks `build/reports/omnivore/` and POSTs each `omnivore-report.json` (one per target) to the dashboard's ingestion endpoint.
 
 **DependencyGraphResolver** (`com.jkjamies.omnivore.gradle.configuration`): Walks Gradle's resolved configurations (`runtimeClasspath`, `testRuntimeClasspath`) to build a graph of modules and edges. Supports internal project modules and optionally external (Maven) dependencies.
 

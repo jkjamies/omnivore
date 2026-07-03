@@ -14,9 +14,14 @@ Multi-module Android project for testing the Omnivore coverage plugin with both 
 ```
 
 Reports generated in `build/reports/omnivore/`:
-- `omnivore-report.json` — machine-readable coverage data
-- `index.html` — visual HTML report
-- `coverage.md` — Markdown summary
+- `omnivore-report.json` — machine-readable coverage data. When a run has both
+  unit and instrumented coverage, one is written per target under a target-named
+  subdirectory (`jvm-unit/omnivore-report.json`,
+  `android-instrumented/omnivore-report.json`) so the dashboard tracks each as a
+  separate series; a unit-only run writes a single top-level `omnivore-report.json`.
+  `omnivoreUpload` posts each of them.
+- `index.html` — visual HTML report (combined view)
+- `coverage.md` — Markdown summary (combined view)
 
 ### JaCoCo (opt-in second coverage source)
 
