@@ -59,4 +59,18 @@ mod tests {
         assert_eq!(snapshot.file_count, 1);
         assert!(snapshot.commit_sha.as_deref() == Some("abc123"));
     }
+
+    #[test]
+    fn empty_source_falls_back_to_agent() {
+        // A wire report with an explicit empty "source" must not persist "" —
+        // it falls back to the Omnivore agent.
+        let json = r#"{
+            "version": "0.1.0", "format": "omnivore",
+            "project": {"id": "p", "name": "P", "target": "JVM_UNIT", "source": ""},
+            "coverage": {"lineRate": 1.0, "branchRate": 1.0, "linesCovered": 1, "linesTotal": 1, "branchesCovered": 0, "branchesTotal": 0},
+            "files": []
+        }"#;
+        let (_, snapshot) = parse(json).unwrap();
+        assert_eq!(snapshot.source, "omnivore-agent");
+    }
 }
