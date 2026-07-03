@@ -1,19 +1,11 @@
 use crate::model::coverage::{
-    CoverageSummary, CoverageSnapshot, CoverageTarget, FileCoverage, LineCoverage,
+    source, CoverageSummary, CoverageSnapshot, CoverageTarget, FileCoverage, LineCoverage,
     OmnivoreReport, ProjectInfo,
 };
-use crate::parsers::ParseError;
-use chrono::Utc;
-use uuid::Uuid;
+use crate::parsers::{IngestMeta, ParseError};
 
 /// Metadata not present in lcov format — must be supplied externally.
-#[derive(Debug, Clone, Default)]
-pub struct LcovMeta {
-    pub project_id: Option<String>,
-    pub project_name: Option<String>,
-    pub commit_sha: Option<String>,
-    pub branch: Option<String>,
-}
+pub type LcovMeta = IngestMeta;
 
 /// Parse an lcov-format coverage report.
 ///
@@ -183,6 +175,7 @@ pub fn parse(input: &str, meta: &LcovMeta) -> Result<(OmnivoreReport, CoverageSn
             commit_sha: meta.commit_sha.clone(),
             branch: meta.branch.clone(),
             target: CoverageTarget::Lcov,
+            source: Some(source::LCOV.into()),
         },
         coverage: CoverageSummary {
             line_rate,
@@ -195,25 +188,7 @@ pub fn parse(input: &str, meta: &LcovMeta) -> Result<(OmnivoreReport, CoverageSn
         files,
     };
 
-    let files_json = serde_json::to_string(&report.files).ok();
-    let snapshot = CoverageSnapshot {
-        id: Uuid::new_v4().to_string(),
-        project_id: report.project.id.clone(),
-        commit_sha: report.project.commit_sha.clone(),
-        branch: report.project.branch.clone(),
-        target: format!("{:?}", report.project.target),
-        line_rate: report.coverage.line_rate,
-        branch_rate: report.coverage.branch_rate,
-        lines_covered: report.coverage.lines_covered,
-        lines_total: report.coverage.lines_total,
-        branches_covered: report.coverage.branches_covered,
-        branches_total: report.coverage.branches_total,
-        file_count: report.files.len() as i64,
-        created_at: Utc::now(),
-        files_json,
-        dependencies_json: None,
-    };
-
+    let snapshot = CoverageSnapshot::from_report(&report, Some(source::LCOV));
     Ok((report, snapshot))
 }
 

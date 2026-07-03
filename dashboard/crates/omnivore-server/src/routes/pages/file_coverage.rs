@@ -199,13 +199,13 @@ async fn find_file_across_targets(
     project_id: &str,
     file_path: &str,
 ) -> Result<FileCoverage, StatusCode> {
-    let target_names = db
-        .get_targets_for_project(project_id)
+    let series = db
+        .get_series_for_project(project_id)
         .await
         .unwrap_or_default();
 
-    for tname in &target_names {
-        if let Ok(Some(snap)) = db.get_latest_snapshot_by_target(project_id, tname).await {
+    for (tname, sname) in &series {
+        if let Ok(Some(snap)) = db.get_latest_snapshot_by_series(project_id, tname, sname).await {
             let files: Vec<FileCoverage> = snap
                 .files_json
                 .as_ref()
@@ -225,14 +225,14 @@ async fn find_file_with_delta(
     project_id: &str,
     file_path: &str,
 ) -> Result<(FileCoverage, Option<f64>, Option<f64>), StatusCode> {
-    let target_names = db
-        .get_targets_for_project(project_id)
+    let series = db
+        .get_series_for_project(project_id)
         .await
         .unwrap_or_default();
 
-    for tname in &target_names {
+    for (tname, sname) in &series {
         let snaps = db
-            .get_snapshots_for_project_by_target(project_id, tname, 2)
+            .get_snapshots_for_project_by_series(project_id, tname, sname, 2)
             .await
             .unwrap_or_default();
 

@@ -90,7 +90,7 @@
             {% if item.targets.len() > 1 %}
               {% for t in item.targets %}
               <div class="target-indicator">
-                <span class="target-label">{{ t.label }}</span>
+                <span class="target-label">{{ t.label }}{% if !t.source_label.is_empty() %} <span class="badge badge-source">{{ t.source_label }}</span>{% endif %}</span>
                 <span class="target-rate" style="color:{{ self.rate_color_t(t.line_rate, item.effective_line_threshold, item.effective_line_warn_threshold) }}">{{ self.fmt_pct(t.line_rate) }}%</span> {{ self.fmt_delta(t.line_delta)|safe }}
               </div>
               <div class="coverage-bar" style="margin-top:2px;margin-bottom:6px;">
