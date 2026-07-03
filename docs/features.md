@@ -6,7 +6,8 @@ Tracks which features exist in the project and which tier they belong to. Featur
 
 | Feature | Status |
 |---|---|
-| Multi-format coverage ingestion (Omnivore, lcov, llvm-cov, Go, Python) | Built |
+| Multi-format coverage ingestion (Omnivore, lcov, llvm-cov, Go, Python, JaCoCo/Kover XML) | Built |
+| Provenance tracking — `source` (tool) decoupled from `target` (environment); trends/retention keyed per `(target, source)` | Built |
 | Coverage trends with Chart.js graphs | Built |
 | Nested file tree with directory-level aggregates | Built |
 | File-level coverage with source code view (via GitHub API) | Built |
@@ -16,7 +17,7 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Configurable thresholds — global defaults | Built |
 | Dashboard home summary (total projects, avg coverage, pass/warn/fail counts) | Built |
 | Search/filter on projects page | Built |
-| Data retention — default limits (30 full / 60 summary per project+target) | Built |
+| Data retention — default limits (30 full / 60 summary per project+target+source series) | Built |
 | Coverage badges for READMEs — Markdown, HTML, URL snippets (`/badge/{project_id}`) | Built |
 | GitHub Action for CI upload (`.github/actions/upload-coverage/`) | Built |
 | Project delete with confirmation | Built |

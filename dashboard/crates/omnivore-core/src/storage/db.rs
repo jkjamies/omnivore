@@ -55,6 +55,7 @@ impl Database {
                 commit_sha TEXT,
                 branch TEXT,
                 target TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'omnivore-agent',
                 line_rate REAL NOT NULL,
                 branch_rate REAL NOT NULL,
                 lines_covered INTEGER NOT NULL,
@@ -103,6 +104,24 @@ impl Database {
             sqlx::query("ALTER TABLE coverage_snapshots ADD COLUMN dependencies_json TEXT")
                 .execute(&self.pool)
                 .await?;
+        }
+
+        // Migration: add source (provenance) column to coverage_snapshots if missing.
+        // Existing rows predate multi-source ingestion and came from the native
+        // agent, so they backfill to 'omnivore-agent' via the column default.
+        let has_source_col: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('coverage_snapshots') WHERE name = 'source'"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0) > 0;
+
+        if !has_source_col {
+            sqlx::query(
+                "ALTER TABLE coverage_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'omnivore-agent'"
+            )
+            .execute(&self.pool)
+            .await?;
         }
 
         // Migration: add github_repo column to projects if missing
@@ -737,16 +756,17 @@ impl Database {
         let created_at = snapshot.created_at.to_rfc3339();
         sqlx::query(
             "INSERT INTO coverage_snapshots
-             (id, project_id, commit_sha, branch, target, line_rate, branch_rate,
+             (id, project_id, commit_sha, branch, target, source, line_rate, branch_rate,
               lines_covered, lines_total, branches_covered, branches_total,
               file_count, created_at, files_json, dependencies_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&snapshot.id)
         .bind(&snapshot.project_id)
         .bind(&snapshot.commit_sha)
         .bind(&snapshot.branch)
         .bind(&snapshot.target)
+        .bind(&snapshot.source)
         .bind(snapshot.line_rate)
         .bind(snapshot.branch_rate)
         .bind(snapshot.lines_covered)
@@ -772,7 +792,7 @@ impl Database {
             r#"SELECT id as "id!: String", project_id,
                       commit_sha as "commit_sha: String",
                       branch as "branch: String",
-                      target, line_rate, branch_rate,
+                      target, source, line_rate, branch_rate,
                       lines_covered, lines_total,
                       branches_covered, branches_total, file_count,
                       created_at as "created_at!: DateTime<Utc>",
@@ -798,7 +818,7 @@ impl Database {
             r#"SELECT id as "id!: String", project_id,
                       commit_sha as "commit_sha: String",
                       branch as "branch: String",
-                      target, line_rate, branch_rate,
+                      target, source, line_rate, branch_rate,
                       lines_covered, lines_total,
                       branches_covered, branches_total, file_count,
                       created_at as "created_at!: DateTime<Utc>",
@@ -826,7 +846,7 @@ impl Database {
             r#"SELECT id as "id!: String", project_id,
                       commit_sha as "commit_sha: String",
                       branch as "branch: String",
-                      target, line_rate, branch_rate,
+                      target, source, line_rate, branch_rate,
                       lines_covered, lines_total,
                       branches_covered, branches_total, file_count,
                       created_at as "created_at!: DateTime<Utc>",
@@ -854,7 +874,7 @@ impl Database {
             r#"SELECT id as "id!: String", project_id,
                       commit_sha as "commit_sha: String",
                       branch as "branch: String",
-                      target, line_rate, branch_rate,
+                      target, source, line_rate, branch_rate,
                       lines_covered, lines_total,
                       branches_covered, branches_total, file_count,
                       created_at as "created_at!: DateTime<Utc>",
@@ -883,7 +903,7 @@ impl Database {
             r#"SELECT id as "id!: String", project_id,
                       commit_sha as "commit_sha: String",
                       branch as "branch: String",
-                      target, line_rate, branch_rate,
+                      target, source, line_rate, branch_rate,
                       lines_covered, lines_total,
                       branches_covered, branches_total, file_count,
                       created_at as "created_at!: DateTime<Utc>",
@@ -911,7 +931,7 @@ impl Database {
             r#"SELECT id as "id!: String", project_id,
                       commit_sha as "commit_sha: String",
                       branch as "branch: String",
-                      target, line_rate, branch_rate,
+                      target, source, line_rate, branch_rate,
                       lines_covered, lines_total,
                       branches_covered, branches_total, file_count,
                       created_at as "created_at!: DateTime<Utc>",
@@ -937,7 +957,7 @@ impl Database {
             r#"SELECT id as "id!: String", project_id,
                       commit_sha as "commit_sha: String",
                       branch as "branch: String",
-                      target, line_rate, branch_rate,
+                      target, source, line_rate, branch_rate,
                       lines_covered, lines_total,
                       branches_covered, branches_total, file_count,
                       created_at as "created_at!: DateTime<Utc>",
@@ -956,6 +976,9 @@ impl Database {
     }
 
     /// Get distinct targets that have snapshots for a project.
+    ///
+    /// Target-only view (aggregated across sources) — used by the badge, embed,
+    /// and export endpoints whose contract is keyed on target alone.
     pub async fn get_targets_for_project(
         &self,
         project_id: &str,
@@ -967,6 +990,85 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    /// Get the distinct `(target, source)` series that have snapshots for a
+    /// project. A "series" is the unit the dashboard trends and prunes on, so a
+    /// project measured by two tools for the same target shows as two series.
+    pub async fn get_series_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT DISTINCT target, source FROM coverage_snapshots
+             WHERE project_id = ? ORDER BY target, source",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Get the latest snapshot for a specific `(target, source)` series.
+    pub async fn get_latest_snapshot_by_series(
+        &self,
+        project_id: &str,
+        target: &str,
+        source: &str,
+    ) -> Result<Option<CoverageSnapshot>, sqlx::Error> {
+        sqlx::query_as!(
+            CoverageSnapshot,
+            r#"SELECT id as "id!: String", project_id,
+                      commit_sha as "commit_sha: String",
+                      branch as "branch: String",
+                      target, source, line_rate, branch_rate,
+                      lines_covered, lines_total,
+                      branches_covered, branches_total, file_count,
+                      created_at as "created_at!: DateTime<Utc>",
+                      files_json as "files_json: String",
+                      dependencies_json as "dependencies_json: String"
+               FROM coverage_snapshots
+               WHERE project_id = ? AND target = ? AND source = ?
+               ORDER BY created_at DESC
+               LIMIT 1"#,
+            project_id,
+            target,
+            source
+        )
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Get trend data (most-recent first) for a specific `(target, source)` series.
+    pub async fn get_snapshots_for_project_by_series(
+        &self,
+        project_id: &str,
+        target: &str,
+        source: &str,
+        limit: i64,
+    ) -> Result<Vec<CoverageSnapshot>, sqlx::Error> {
+        sqlx::query_as!(
+            CoverageSnapshot,
+            r#"SELECT id as "id!: String", project_id,
+                      commit_sha as "commit_sha: String",
+                      branch as "branch: String",
+                      target, source, line_rate, branch_rate,
+                      lines_covered, lines_total,
+                      branches_covered, branches_total, file_count,
+                      created_at as "created_at!: DateTime<Utc>",
+                      files_json as "files_json: String",
+                      dependencies_json as "dependencies_json: String"
+               FROM coverage_snapshots
+               WHERE project_id = ? AND target = ? AND source = ?
+               ORDER BY created_at DESC
+               LIMIT ?"#,
+            project_id,
+            target,
+            source,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 
     // -- Source cache --
@@ -1071,14 +1173,18 @@ impl Database {
             RatchetResult::default()
         };
 
-        // Prune old snapshots for this project+target
-        let target = &snapshot.target;
-        self.prune_snapshots(&snapshot.project_id, target).await?;
+        // Prune old snapshots for this project+target+source series
+        self.prune_snapshots(&snapshot.project_id, &snapshot.target, &snapshot.source)
+            .await?;
 
         Ok(ratchet)
     }
 
     /// Prune old snapshots based on retention limits.
+    ///
+    /// Retention applies per `(project, target, source)` series so coverage from
+    /// different tools (e.g. the native agent vs. Kover) keeps independent
+    /// history and one never evicts the other.
     /// - Keep the newest `retention_full` snapshots with full file data.
     /// - Keep the next `retention_summary` snapshots as summary-only (files_json = NULL).
     /// - Delete everything older.
@@ -1086,6 +1192,7 @@ impl Database {
         &self,
         project_id: &str,
         target: &str,
+        source: &str,
     ) -> Result<(), sqlx::Error> {
         let settings = self.get_global_settings().await.unwrap_or_default();
         let retention_full = settings.retention_full;
@@ -1097,13 +1204,14 @@ impl Database {
             "UPDATE coverage_snapshots SET files_json = NULL
              WHERE id IN (
                SELECT id FROM coverage_snapshots
-               WHERE project_id = ? AND target = ?
+               WHERE project_id = ? AND target = ? AND source = ?
                ORDER BY created_at DESC
                LIMIT -1 OFFSET ?
              ) AND files_json IS NOT NULL",
         )
         .bind(project_id)
         .bind(target)
+        .bind(source)
         .bind(retention_full)
         .execute(&self.pool)
         .await?;
@@ -1113,13 +1221,14 @@ impl Database {
             "DELETE FROM coverage_snapshots
              WHERE id IN (
                SELECT id FROM coverage_snapshots
-               WHERE project_id = ? AND target = ?
+               WHERE project_id = ? AND target = ? AND source = ?
                ORDER BY created_at DESC
                LIMIT -1 OFFSET ?
              )",
         )
         .bind(project_id)
         .bind(target)
+        .bind(source)
         .bind(retention_total)
         .execute(&self.pool)
         .await?;

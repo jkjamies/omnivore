@@ -72,22 +72,22 @@ pub async fn projects_page(
             .await
             .unwrap_or(None);
 
-        let target_names = db
-            .get_targets_for_project(&project.id)
+        let series = db
+            .get_series_for_project(&project.id)
             .await
             .unwrap_or_default();
         let mut targets = Vec::new();
         let mut sparkline_points: Vec<f64> = Vec::new();
-        for tname in &target_names {
+        for (tname, sname) in &series {
             let snaps = db
-                .get_snapshots_for_project_by_target(&project.id, tname, 15)
+                .get_snapshots_for_project_by_series(&project.id, tname, sname, 15)
                 .await
                 .unwrap_or_default();
             if let Some(snap) = snaps.first() {
                 let prev = snaps.get(1);
                 targets.push(TargetSnapshot::from_snapshot(snap, prev, vec![]));
             }
-            // Use the first target's trend for the sparkline
+            // Use the first series' trend for the sparkline
             if sparkline_points.is_empty() {
                 sparkline_points = snaps.iter().rev().map(|s| s.line_rate).collect();
             }
