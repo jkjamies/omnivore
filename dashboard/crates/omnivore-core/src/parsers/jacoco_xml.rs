@@ -102,6 +102,11 @@ pub fn parse(
         .map_err(|e| ParseError::Jacoco(format!("Malformed XML: {e}")))?;
 
     let mut files: Vec<FileCoverage> = Vec::new();
+    // Running per-line branch totals, used as a fallback when the report omits
+    // its top-level BRANCH counter (JaCoCo/Kover may do so even when lines carry
+    // cb/mb), so real branch coverage isn't dropped.
+    let mut agg_branches_covered: i64 = 0;
+    let mut agg_branches_total: i64 = 0;
 
     for package in &report.packages {
         for sf in &package.sourcefiles {
@@ -141,6 +146,9 @@ pub fn parse(
             let line_rate = ratio(file_lines_covered, lines_total);
             let branch_rate = ratio(file_branches_covered, file_branches_total);
 
+            agg_branches_covered += file_branches_covered;
+            agg_branches_total += file_branches_total;
+
             files.push(FileCoverage {
                 path,
                 line_rate,
@@ -173,7 +181,7 @@ pub fn parse(
 
     let (branches_covered, branches_total) = match report.counter("BRANCH") {
         Some(c) => (c.covered, c.covered + c.missed),
-        None => (0, 0),
+        None => (agg_branches_covered, agg_branches_total),
     };
 
     let project_id = meta
@@ -352,6 +360,27 @@ mod tests {
         let (_, snapshot) = parse(xml, &meta, CoverageTarget::JvmUnit, source::JACOCO).unwrap();
         assert_eq!(snapshot.lines_total, 2);
         assert_eq!(snapshot.lines_covered, 1);
+    }
+
+    #[test]
+    fn parse_jacoco_branch_fallback_without_report_counter() {
+        // No report-level BRANCH counter, but lines carry cb/mb — branch totals
+        // must fall back to the per-line sums rather than reporting 0/0.
+        let xml = r#"<report name="r">
+          <package name="p">
+            <sourcefile name="A.kt">
+              <line nr="1" mi="0" ci="2" mb="1" cb="1"/>
+              <line nr="2" mi="0" ci="2" mb="0" cb="2"/>
+            </sourcefile>
+          </package>
+        </report>"#;
+        let meta = IngestMeta::default();
+        let (report, snapshot) =
+            parse(xml, &meta, CoverageTarget::JvmUnit, source::JACOCO).unwrap();
+        // covered = 1 + 2 = 3; total = (1+1) + (0+2) = 4.
+        assert_eq!(snapshot.branches_covered, 3);
+        assert_eq!(snapshot.branches_total, 4);
+        assert!((report.coverage.branch_rate - 0.75).abs() < 1e-9);
     }
 
     #[test]

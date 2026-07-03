@@ -207,7 +207,7 @@ impl CoverageSnapshot {
         let source = source
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .or_else(|| report.project.source.clone())
+            .or_else(|| report.project.source.clone().filter(|s| !s.is_empty()))
             .unwrap_or_else(|| source::OMNIVORE_AGENT.to_string());
 
         CoverageSnapshot {
