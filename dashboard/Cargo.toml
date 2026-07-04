@@ -42,7 +42,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # Templating
-askama = "0.15"
+askama = "0.16"
 
 # HTTP client
 reqwest = { version = "0.13", features = ["json", "query"] }
