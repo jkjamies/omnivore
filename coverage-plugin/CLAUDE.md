@@ -50,8 +50,30 @@ Version catalog: `gradle/libs.versions.toml`
 **Probe system:**
 - Each class gets a static `$omnivoreProbes: BooleanArray` field
 - `<clinit>` calls `OmnivoreRuntime.getProbes(classId, className, probeCount)`
-- `ProbeInserter` sets `probes[index] = true` at line/branch points
 - `ExecutionDataStore` holds all probe arrays (thread-safe, concurrent)
+- Class IDs are CRC64 of the class *name* (`ClassId`) — not the bytecode as
+  JaCoCo uses, because the ID is baked into the instrumented `<clinit>` and the
+  AGP path never sees the original bytes
+
+**Probe placement — branch probes are on control-flow EDGES, not on the branch
+instruction.** A probe in front of a conditional jump fires when the condition is
+*evaluated*, which says nothing about which way control went; that made
+`if (x) a() else b()` report 100% branch coverage from a test taking only the
+`true` path. Each conditional jump is rewritten to route both outcomes through
+their own probe block, and each switch arm (plus `default`) gets a probe.
+
+**The invariant that matters:** probe indices are positional, so
+`ClassInstrumenter.walkProbes` must stay in lockstep with `ProbeInserter`'s
+emission order. If they diverge, coverage is attributed to the wrong source lines
+with no error anywhere. Counting, probe-map building, and instrumentation all go
+through that one traversal for exactly this reason — and both the JVM agent and
+the AGP transform share it (`ClassInstrumenter` / `InstrumentingClassVisitor`),
+rather than keeping the parallel implementations that had already drifted apart.
+
+**Diagnostics:** `InstrumentationStats` counts why classes were or weren't
+instrumented; the agent writes a `.stats` file next to the `.omnivore` data and
+`omnivoreReport` prints a summary line. A class can drop out of coverage for
+several unrelated reasons, all of which were previously a silent `return null`.
 
 **Shutdown:** `ShutdownHook` flushes `.omnivore` + `.probes` files on JVM exit.
 
@@ -118,7 +140,16 @@ omnivore {
 
 **`.omnivore` (execution data):** Magic `OMNIVORE` (8 bytes) + version (short) + class entries (classId: long, className: UTF, probes: bit-packed booleans).
 
-**`.probes` (probe maps):** Magic `OMNIPROB` (8 bytes) + version (short) + class entries with probe metadata (index, line, method, descriptor, type: LINE/BRANCH).
+**`.probes` (probe maps):** Magic `OMNIPROB` (8 bytes) + version (short) + class entries with probe metadata (index, line, method, descriptor, type: LINE/BRANCH, isComposable, branchGroup).
+
+Format **v3**. v1/v2 files are rejected rather than upgraded: branch probes moved
+onto control-flow edges, so probe indices mean something different and pairing an
+old `.probes` with new execution data would silently attribute coverage to the
+wrong lines. `branchGroup` identifies which decision point an edge belongs to, so
+two edges of one `if` are distinguishable from two unrelated branches.
+
+**`.stats` (instrumentation summary):** Java `Properties` — instrumented count,
+per-reason skip counts, and up to 20 failure messages.
 
 ## Publishing
 

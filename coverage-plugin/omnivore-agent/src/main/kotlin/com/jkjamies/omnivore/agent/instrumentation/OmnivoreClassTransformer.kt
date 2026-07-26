@@ -1,9 +1,11 @@
 package com.jkjamies.omnivore.agent.instrumentation
 
 import com.jkjamies.omnivore.agent.AgentConfig
+import com.jkjamies.omnivore.agent.runtime.ClassId
 import com.jkjamies.omnivore.agent.runtime.ClassProbeMap
 import com.jkjamies.omnivore.agent.runtime.ExecutionDataStore
 import com.jkjamies.omnivore.agent.runtime.OmnivoreRuntime
+import com.jkjamies.omnivore.agent.runtime.ProbeEntry
 import com.jkjamies.omnivore.agent.runtime.ProbeMap
 import com.jkjamies.omnivore.agent.runtime.ProbeType
 import org.objectweb.asm.ClassReader
@@ -14,8 +16,10 @@ import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.tree.AbstractInsnNode
 import org.objectweb.asm.tree.ClassNode
-import org.objectweb.asm.tree.JumpInsnNode
 import org.objectweb.asm.tree.LineNumberNode
+import org.objectweb.asm.tree.LookupSwitchInsnNode
+import org.objectweb.asm.tree.MethodNode
+import org.objectweb.asm.tree.TableSwitchInsnNode
 import java.lang.instrument.ClassFileTransformer
 import java.security.ProtectionDomain
 
@@ -48,27 +52,53 @@ class OmnivoreClassTransformer(
         // Skip classes from classloaders that can't see OmnivoreRuntime.
         // Without this, instrumented classes would throw NoClassDefFoundError
         // when their <clinit> tries to call OmnivoreRuntime.getProbes().
-        if (loader != null && !canSeeRuntime(loader)) return null
+        if (loader != null && !canSeeRuntime(loader)) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.NO_RUNTIME_ACCESS)
+            return null
+        }
 
         // Skip classes from test source sets (e.g., build/classes/kotlin/test/)
-        if (isFromTestSourceSet(protectionDomain)) return null
+        if (isFromTestSourceSet(protectionDomain)) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.TEST_SOURCES)
+            return null
+        }
+
+        // An explicit include wins over the built-in skip list. The list is a
+        // convenience for the common case, not a statement about what can be
+        // instrumented — and it contains broad prefixes like `com/google/` and
+        // `com/squareup/`. Anyone whose own code lives under one of those used
+        // to get no coverage and no explanation, with no way to override it.
+        val explicitlyIncluded = matchesIncludePatterns(className, requireExplicit = true)
 
         // Never instrument JDK, Kotlin stdlib, or other infrastructure
-        if (shouldSkipInfrastructure(className)) return null
+        if (!explicitlyIncluded && shouldSkipInfrastructure(className)) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.INFRASTRUCTURE)
+            return null
+        }
 
-        // Check include/exclude patterns
-        if (!matchesIncludePatterns(className)) return null
-        if (matchesExcludePatterns(className)) return null
+        // Check include/exclude patterns. An exclude still wins over an
+        // include — that is the user contradicting themselves, and the safer
+        // reading of "exclude this" is to honour it.
+        if (!matchesIncludePatterns(className) || matchesExcludePatterns(className)) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.FILTERED)
+            return null
+        }
 
         // Check Compose-generated class patterns
-        if (config.composeFilterEnabled && ComposeDetector.isGeneratedClass(className)) return null
         if (config.composeFilterEnabled &&
-            ComposeDetector.matchesExcludePattern(className, config.composeExcludePatterns)
-        ) return null
+            (ComposeDetector.isGeneratedClass(className) ||
+                ComposeDetector.matchesExcludePattern(className, config.composeExcludePatterns))
+        ) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.COMPOSE)
+            return null
+        }
 
         return try {
-            instrumentClass(className, classfileBuffer)
+            instrumentClass(className, classfileBuffer, loader).also {
+                if (it != null) InstrumentationStats.instrumented()
+            }
         } catch (e: Exception) {
+            InstrumentationStats.failed(className, e)
             System.err.println("[Omnivore] Warning: Failed to instrument $className: ${e.message}")
             null
         }
@@ -79,7 +109,11 @@ class OmnivoreClassTransformer(
      * 1. Analyze with tree API to count probes and make filtering decisions
      * 2. Instrument with visitor API, injecting probes and <clinit> initialization
      */
-    private fun instrumentClass(className: String, classfileBuffer: ByteArray): ByteArray? {
+    private fun instrumentClass(
+        className: String,
+        classfileBuffer: ByteArray,
+        loader: ClassLoader?,
+    ): ByteArray? {
         val reader = ClassReader(classfileBuffer)
 
         // First pass: analyze the class structure
@@ -87,7 +121,10 @@ class OmnivoreClassTransformer(
         reader.accept(classNode, ClassReader.EXPAND_FRAMES)
 
         // Skip interfaces — adding static fields with ACC_TRANSIENT to interfaces is illegal
-        if ((classNode.access and Opcodes.ACC_INTERFACE) != 0) return null
+        if ((classNode.access and Opcodes.ACC_INTERFACE) != 0) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.INTERFACE)
+            return null
+        }
 
         // If already instrumented by AGP build-time transform, don't re-instrument
         // but still build the probe map so the report task can correlate probes to source lines.
@@ -97,115 +134,61 @@ class OmnivoreClassTransformer(
 
         // Check class-level Compose patterns with full class info
         if (config.composeFilterEnabled && ComposeDetector.isGeneratedClass(classNode)) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.COMPOSE)
             return null
         }
 
         // Check annotation-based exclusion
         if (hasExcludedAnnotation(classNode.visibleAnnotations, classNode.invisibleAnnotations)) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.FILTERED)
             return null
         }
 
         // Count total probes needed across all methods
-        val totalProbeCount = countProbes(classNode)
-        if (totalProbeCount == 0) return null
+        val totalProbeCount = ClassInstrumenter.countProbes(classNode, config)
+        if (totalProbeCount == 0) {
+            // Overwhelmingly means the class was compiled without debug info,
+            // since line probes come from the line-number table.
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.NO_LINE_NUMBERS)
+            return null
+        }
 
         // Build the probe map (needed for both fresh and already-instrumented classes)
         val classId = classNameToId(className)
         val sourceFile = classNode.sourceFile
         val classProbeMap = probeMap?.getOrCreateClassMap(classId, className, sourceFile)
         if (classProbeMap != null) {
-            buildProbeMap(classNode, classProbeMap)
+            ClassInstrumenter.buildProbeMap(classNode, config, classProbeMap)
         }
 
         // If already instrumented, we have the probe map now — don't re-instrument
-        if (alreadyInstrumented) return null
+        if (alreadyInstrumented) {
+            InstrumentationStats.skipped(InstrumentationStats.SkipReason.ALREADY_INSTRUMENTED)
+            return null
+        }
 
-        // Second pass: instrument
-        val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES)
+        // Second pass: instrument.
+        //
+        // classProbeMap is deliberately null here: buildProbeMap above already
+        // recorded an entry for every probe. Passing it again made ProbeInserter
+        // record each probe a *second* time, which doubled every class's probe
+        // list — and since CoverageAnalyzer counts one branch per BRANCH entry,
+        // it doubled reported branch totals. (Line entries survived because they
+        // are keyed by line number and collapsed on insert, which is why the
+        // duplication went unnoticed.)
+        val writer = LoaderAwareClassWriter(loader)
         val instrumenter = InstrumentingClassVisitor(
             classId = classId,
             className = className,
             classNode = classNode,
             config = config,
             totalProbeCount = totalProbeCount,
-            classProbeMap = classProbeMap,
+            classProbeMap = null,
             delegate = writer,
         )
 
         reader.accept(instrumenter, ClassReader.EXPAND_FRAMES)
         return writer.toByteArray()
-    }
-
-    /** Count probes that will be inserted (dry run). */
-    private fun countProbes(classNode: ClassNode): Int {
-        var total = 0
-        for (method in classNode.methods ?: emptyList()) {
-            val name = method.name ?: continue
-            val access = method.access
-            if (name == "<clinit>") continue
-            if ((access and Opcodes.ACC_BRIDGE) != 0) continue
-            if ((access and Opcodes.ACC_ABSTRACT) != 0) continue
-            if ((access and Opcodes.ACC_NATIVE) != 0) continue
-            if (KotlinDetector.isSyntheticBridgeMethod(method)) continue
-            if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) continue
-
-            val seenLines = mutableSetOf<Int>()
-            for (insn in method.instructions ?: continue) {
-                when (insn.type) {
-                    AbstractInsnNode.LINE -> {
-                        if (seenLines.add((insn as LineNumberNode).line)) total++
-                    }
-                    AbstractInsnNode.JUMP_INSN -> {
-                        if ((insn as JumpInsnNode).opcode != Opcodes.GOTO) total++
-                    }
-                }
-            }
-        }
-        return total
-    }
-
-    /**
-     * Build probe map entries by analyzing the class structure (same logic as countProbes
-     * but records each probe's location). Used for already-instrumented classes where
-     * we need the map but don't need to re-instrument.
-     */
-    private fun buildProbeMap(classNode: ClassNode, classProbeMap: ClassProbeMap) {
-        var probeIndex = 0
-        for (method in classNode.methods ?: emptyList()) {
-            val name = method.name ?: continue
-            val access = method.access
-            if (name == "<clinit>") continue
-            if ((access and Opcodes.ACC_BRIDGE) != 0) continue
-            if ((access and Opcodes.ACC_ABSTRACT) != 0) continue
-            if ((access and Opcodes.ACC_NATIVE) != 0) continue
-            if (KotlinDetector.isSyntheticBridgeMethod(method)) continue
-            if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) continue
-
-            val isComposable = ComposeDetector.isComposableMethod(method)
-
-            var currentLine = -1
-            val seenLines = mutableSetOf<Int>()
-            for (insn in method.instructions ?: continue) {
-                when (insn.type) {
-                    AbstractInsnNode.LINE -> {
-                        val line = (insn as LineNumberNode).line
-                        currentLine = line
-                        if (seenLines.add(line)) {
-                            classProbeMap.addProbe(
-                                probeIndex++, line, name, method.desc ?: "", ProbeType.LINE, isComposable
-                            )
-                        }
-                    }
-                    AbstractInsnNode.JUMP_INSN -> {
-                        if ((insn as JumpInsnNode).opcode != Opcodes.GOTO) {
-                            classProbeMap.addProbe(
-                                probeIndex++, currentLine, name, method.desc ?: "", ProbeType.BRANCH, isComposable
-                            )
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /**
@@ -242,13 +225,13 @@ class OmnivoreClassTransformer(
             "/(classes/[^/]+|kotlin-classes)/((test|androidTest|instrumentedTest)[^/]*|[^/]*(UnitTest|AndroidTest))(/|$)"
         )
 
-        fun classNameToId(className: String): Long {
-            var hash = 0L
-            for (char in className) {
-                hash = hash * 31 + char.code
-            }
-            return hash
-        }
+        /**
+         * Class identifier. Delegates to [ClassId] so the JVM agent and the AGP
+         * build-time transform derive the same value — they must, because the
+         * agent builds probe maps for classes the AGP path already instrumented,
+         * and the ID is baked into that bytecode.
+         */
+        fun classNameToId(className: String): Long = ClassId.forClassName(className)
     }
 
     private fun shouldSkipInfrastructure(className: String): Boolean {
@@ -281,8 +264,13 @@ class OmnivoreClassTransformer(
         return skipPrefixes.any { className.startsWith(it) }
     }
 
-    private fun matchesIncludePatterns(className: String): Boolean {
-        if (config.includes.isEmpty()) return true
+    /**
+     * @param requireExplicit when true, an empty include list does *not* match.
+     *   Used to decide whether the user has deliberately opted a class in,
+     *   which is what allows overriding the built-in infrastructure skip list.
+     */
+    private fun matchesIncludePatterns(className: String, requireExplicit: Boolean = false): Boolean {
+        if (config.includes.isEmpty()) return !requireExplicit
         val dotName = className.replace('/', '.')
         return config.includes.any { patternMatches(it, dotName) }
     }
@@ -292,24 +280,11 @@ class OmnivoreClassTransformer(
         return config.excludes.any { patternMatches(it, dotName) }
     }
 
-    private fun globMatches(pattern: String, text: String): Boolean {
-        val regex = pattern
-            .replace(".", "\\.")
-            .replace("*", ".*")
-            .replace("?", ".")
-        return Regex(regex).matches(text)
-    }
-
     /**
      * Match a pattern against text. Supports glob (default) and regex (prefix with "regex:").
      */
-    private fun patternMatches(pattern: String, text: String): Boolean {
-        return if (pattern.startsWith("regex:")) {
-            Regex(pattern.removePrefix("regex:")).matches(text)
-        } else {
-            globMatches(pattern, text)
-        }
-    }
+    private fun patternMatches(pattern: String, text: String): Boolean =
+        GlobPattern.matches(pattern, text)
 
     /**
      * Check if any of the annotations match the configured exclude annotation patterns.
@@ -332,139 +307,4 @@ class OmnivoreClassTransformer(
         }
     }
 
-}
-
-/**
- * ASM ClassVisitor that instruments methods with coverage probes
- * and generates the probe initialization code in <clinit>.
- */
-private class InstrumentingClassVisitor(
-    private val classId: Long,
-    private val className: String,
-    private val classNode: ClassNode,
-    private val config: AgentConfig,
-    private val totalProbeCount: Int,
-    private val classProbeMap: ClassProbeMap?,
-    delegate: ClassVisitor,
-) : ClassVisitor(Opcodes.ASM9, delegate) {
-
-    private var globalProbeOffset = 0
-    private var hasExistingClinit = false
-
-    override fun visitMethod(
-        access: Int,
-        name: String?,
-        descriptor: String?,
-        signature: String?,
-        exceptions: Array<out String>?,
-    ): MethodVisitor? {
-        if (name == null || descriptor == null) {
-            return super.visitMethod(access, name, descriptor, signature, exceptions)
-        }
-
-        // Prepend probe initialization to existing <clinit>
-        if (name == "<clinit>") {
-            hasExistingClinit = true
-            val mv = super.visitMethod(access, name, descriptor, signature, exceptions)
-                ?: return null
-            return ClinitPrefixVisitor(classId, className, totalProbeCount, mv)
-        }
-
-        val mv = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
-
-        // Skip non-instrumentable methods
-        if ((access and Opcodes.ACC_BRIDGE) != 0) return mv
-        if ((access and Opcodes.ACC_ABSTRACT) != 0) return mv
-        if ((access and Opcodes.ACC_NATIVE) != 0) return mv
-
-        val methodNode = classNode.methods?.find { it.name == name && it.desc == descriptor }
-        if (methodNode != null && KotlinDetector.isSyntheticBridgeMethod(methodNode)) return mv
-        if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) return mv
-
-        val currentOffset = globalProbeOffset
-        val probeInserter = ProbeInserter(className, currentOffset, name, descriptor, classProbeMap, mv)
-        return ProbeCountingMethodVisitor(probeInserter) { count ->
-            globalProbeOffset += count
-        }
-    }
-
-    override fun visitEnd() {
-        // Add the $omnivoreProbes static field
-        super.visitField(
-            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_TRANSIENT,
-            ProbeInserter.PROBE_FIELD_NAME,
-            ProbeInserter.PROBE_FIELD_DESCRIPTOR,
-            null,
-            null
-        )?.visitEnd()
-
-        // Generate <clinit> if the class doesn't have one
-        if (!hasExistingClinit) {
-            val mv = super.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null)
-            if (mv != null) {
-                mv.visitCode()
-                emitProbeInit(mv, classId, className, totalProbeCount)
-                mv.visitInsn(Opcodes.RETURN)
-                mv.visitMaxs(4, 0)
-                mv.visitEnd()
-            }
-        }
-
-        super.visitEnd()
-    }
-}
-
-/** Prepends probe initialization to an existing <clinit>. */
-private class ClinitPrefixVisitor(
-    private val classId: Long,
-    private val className: String,
-    private val totalProbeCount: Int,
-    delegate: MethodVisitor,
-) : MethodVisitor(Opcodes.ASM9, delegate) {
-    override fun visitCode() {
-        super.visitCode()
-        emitProbeInit(mv, classId, className, totalProbeCount)
-    }
-}
-
-/** Wraps a ProbeInserter to capture its final count after visitation. */
-private class ProbeCountingMethodVisitor(
-    private val probeInserter: ProbeInserter,
-    private val onEnd: (Int) -> Unit,
-) : MethodVisitor(Opcodes.ASM9, probeInserter) {
-    override fun visitEnd() {
-        super.visitEnd()
-        onEnd(probeInserter.probeCount)
-    }
-}
-
-/**
- * Emit bytecode: $omnivoreProbes = OmnivoreRuntime.getProbes(classId, className, probeCount)
- */
-private fun emitProbeInit(mv: MethodVisitor, classId: Long, className: String, probeCount: Int) {
-    mv.visitLdcInsn(classId)
-    mv.visitLdcInsn(className.replace('/', '.'))
-    emitIntPush(mv, probeCount)
-    mv.visitMethodInsn(
-        Opcodes.INVOKESTATIC,
-        OmnivoreRuntime.INTERNAL_NAME,
-        OmnivoreRuntime.GET_PROBES_METHOD,
-        OmnivoreRuntime.GET_PROBES_DESCRIPTOR,
-        false
-    )
-    mv.visitFieldInsn(
-        Opcodes.PUTSTATIC,
-        className,
-        ProbeInserter.PROBE_FIELD_NAME,
-        ProbeInserter.PROBE_FIELD_DESCRIPTOR
-    )
-}
-
-private fun emitIntPush(mv: MethodVisitor, value: Int) {
-    when {
-        value in -1..5 -> mv.visitInsn(Opcodes.ICONST_0 + value)
-        value in Byte.MIN_VALUE..Byte.MAX_VALUE -> mv.visitIntInsn(Opcodes.BIPUSH, value)
-        value in Short.MIN_VALUE..Short.MAX_VALUE -> mv.visitIntInsn(Opcodes.SIPUSH, value)
-        else -> mv.visitLdcInsn(value)
-    }
 }

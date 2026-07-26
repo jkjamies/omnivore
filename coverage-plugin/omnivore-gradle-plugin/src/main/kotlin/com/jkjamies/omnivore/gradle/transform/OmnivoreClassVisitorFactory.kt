@@ -5,7 +5,11 @@ import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import com.android.build.api.instrumentation.InstrumentationParameters
 import com.jkjamies.omnivore.agent.AgentConfig
+import com.jkjamies.omnivore.agent.instrumentation.ClassInstrumenter
 import com.jkjamies.omnivore.agent.instrumentation.ComposeDetector
+import com.jkjamies.omnivore.agent.instrumentation.GlobPattern
+import com.jkjamies.omnivore.agent.instrumentation.InstrumentingClassVisitor
+import com.jkjamies.omnivore.agent.runtime.ClassId
 import com.jkjamies.omnivore.agent.runtime.OmnivoreRuntime
 import com.jkjamies.omnivore.agent.runtime.ProbeMap
 import org.gradle.api.provider.ListProperty
@@ -76,12 +80,18 @@ abstract class OmnivoreClassVisitorFactory :
     override fun isInstrumentable(classData: ClassData): Boolean {
         val className = classData.className
 
+        // An explicit include overrides the built-in skip list, which contains
+        // broad prefixes (`com.google.`, `com.squareup.`) that would otherwise
+        // silently swallow a user's own code with no way to opt back in.
+        val includes = parameters.get().includes.getOrElse(emptyList())
+        val explicitlyIncluded =
+            includes.isNotEmpty() && includes.any { patternMatches(it, className) }
+
         // Skip infrastructure
-        if (isInfrastructureClass(className)) return false
+        if (!explicitlyIncluded && isInfrastructureClass(className)) return false
 
         // Check include patterns
-        val includes = parameters.get().includes.getOrElse(emptyList())
-        if (includes.isNotEmpty() && !includes.any { patternMatches(it, className) }) return false
+        if (includes.isNotEmpty() && !explicitlyIncluded) return false
 
         // Check exclude patterns
         val excludes = parameters.get().excludes.getOrElse(emptyList())
@@ -148,222 +158,75 @@ abstract class OmnivoreClassVisitorFactory :
         return skipPrefixes.any { className.startsWith(it) }
     }
 
-    private fun globMatches(pattern: String, text: String): Boolean {
-        val regex = pattern
-            .replace(".", "\\.")
-            .replace("*", ".*")
-            .replace("?", ".")
-        return Regex(regex).matches(text)
-    }
-
-    private fun patternMatches(pattern: String, text: String): Boolean {
-        return if (pattern.startsWith("regex:")) {
-            Regex(pattern.removePrefix("regex:")).matches(text)
-        } else {
-            globMatches(pattern, text)
-        }
-    }
+    private fun patternMatches(pattern: String, text: String): Boolean =
+        GlobPattern.matches(pattern, text)
 }
 
 /**
- * ASM ClassVisitor that instruments a single class with Omnivore probes.
+ * Buffers a class into an ASM [ClassNode], then instruments it with the same
+ * [ClassInstrumenter] core the JVM agent uses.
  *
- * This is a build-time version that works within AGP's transformation pipeline.
- * It performs a two-pass approach: first analyzing the class to count probes,
- * then instrumenting in the visitor pass.
+ * ## Why buffer instead of instrumenting as we go
  *
- * Since we can't do a true two-pass within a single ClassVisitor, we use
- * a deferred approach: collect method info during visitation, then emit
- * the probe field and <clinit> at visitEnd.
+ * AGP hands the transform a streaming [ClassVisitor], and probe-array sizing
+ * needs a number that is not known until every method has been seen. The
+ * previous implementation instrumented in a single streaming pass and worked
+ * around that by emitting a hardcoded `getProbes(classId, name, 1024)` from
+ * `<clinit>` — "generous pre-allocation". Two things were wrong with it:
+ *
+ *  * A class with more than 1024 probes wrote past the end of its array and
+ *    threw `ArrayIndexOutOfBoundsException` at runtime, inside the app under
+ *    test. Edge-based branch probes roughly double probe counts, so that
+ *    ceiling was going to start being hit.
+ *  * Every instrumented class with a static initialiser allocated 1024 booleans
+ *    regardless of need, and reported a probe count unrelated to reality.
+ *
+ * Buffering costs a `ClassNode` per class at build time and removes the guess
+ * entirely. It also lets this path share the agent's probe walker, so switch
+ * statements and edge probes are handled identically instead of being
+ * reimplemented (and previously, omitted) here.
  */
 private class OmnivoreInstrumentingVisitor(
     private val className: String,
     private val config: AgentConfig,
     private val probeMap: ProbeMap?,
-    delegate: ClassVisitor,
-) : ClassVisitor(Opcodes.ASM9, delegate) {
+    private val delegate: ClassVisitor,
+) : ClassNode(Opcodes.ASM9) {
 
-    private val classId = classNameToId(className)
-    private var globalProbeOffset = 0
-    private var hasExistingClinit = false
-    private var totalProbeCount = 0
-    private var isInterface = false
-    private var sourceFile: String? = null
+    override fun visitEnd() {
+        super.visitEnd()
 
-    override fun visit(
-        version: Int,
-        access: Int,
-        name: String?,
-        signature: String?,
-        superName: String?,
-        interfaces: Array<out String>?,
-    ) {
-        isInterface = (access and Opcodes.ACC_INTERFACE) != 0
-        super.visit(version, access, name, signature, superName, interfaces)
-    }
-
-    override fun visitSource(source: String?, debug: String?) {
-        sourceFile = source
-        super.visitSource(source, debug)
-    }
-
-    override fun visitMethod(
-        access: Int,
-        name: String?,
-        descriptor: String?,
-        signature: String?,
-        exceptions: Array<out String>?,
-    ): MethodVisitor? {
-        if (name == null || descriptor == null) {
-            return super.visitMethod(access, name, descriptor, signature, exceptions)
+        // Interfaces cannot carry the ACC_TRANSIENT probe field.
+        if ((access and Opcodes.ACC_INTERFACE) != 0) {
+            accept(delegate)
+            return
         }
 
-        if (name == "<clinit>") {
-            hasExistingClinit = true
-            val mv = super.visitMethod(access, name, descriptor, signature, exceptions)
-                ?: return null
-            return DeferredClinitVisitor(classId, className, mv) { totalProbeCount }
+        val totalProbeCount = ClassInstrumenter.countProbes(this, config)
+        if (totalProbeCount == 0) {
+            accept(delegate)
+            return
         }
 
-        val mv = super.visitMethod(access, name, descriptor, signature, exceptions)
-            ?: return null
-
-        // Skip non-instrumentable methods
-        if ((access and Opcodes.ACC_BRIDGE) != 0) return mv
-        if ((access and Opcodes.ACC_ABSTRACT) != 0) return mv
-        if ((access and Opcodes.ACC_NATIVE) != 0) return mv
-        if (config.composeFilterEnabled && ComposeDetector.isComposeLambdaGroup(name)) return mv
-
+        val classId = ClassId.forClassName(className)
         val classProbeMap = probeMap?.getOrCreateClassMap(classId, className, sourceFile)
-        val currentOffset = globalProbeOffset
-        val probeInserter = ProbeInserter(className, currentOffset, name, descriptor, classProbeMap, mv)
-        return ComposableDetectingVisitor(probeInserter) { count ->
-            globalProbeOffset += count
-            totalProbeCount += count
-        }
-    }
-
-    override fun visitEnd() {
-        // Interfaces cannot have ACC_TRANSIENT fields — skip instrumentation
-        if (!isInterface) {
-            // Add the $omnivoreProbes static field
-            super.visitField(
-                Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_TRANSIENT,
-                ProbeInserter.PROBE_FIELD_NAME,
-                ProbeInserter.PROBE_FIELD_DESCRIPTOR,
-                null,
-                null
-            )?.visitEnd()
-
-            // Generate <clinit> if the class doesn't have one
-            if (!hasExistingClinit && totalProbeCount > 0) {
-                val mv = super.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null)
-                if (mv != null) {
-                    mv.visitCode()
-                    emitProbeInit(mv, classId, className, totalProbeCount)
-                    mv.visitInsn(Opcodes.RETURN)
-                    mv.visitMaxs(4, 0)
-                    mv.visitEnd()
-                }
-            }
+        if (classProbeMap != null) {
+            ClassInstrumenter.buildProbeMap(this, config, classProbeMap)
         }
 
-        super.visitEnd()
-    }
-
-    companion object {
-        fun classNameToId(className: String): Long {
-            var hash = 0L
-            for (char in className) {
-                hash = hash * 31 + char.code
-            }
-            return hash
-        }
-    }
-}
-
-/**
- * Wraps a ProbeInserter to count probes and detect @Composable annotations.
- * When @Composable is detected, sets the flag on the ProbeInserter so probes
- * are marked as composable in the probe map.
- */
-private class ComposableDetectingVisitor(
-    private val probeInserter: ProbeInserter,
-    private val onEnd: (Int) -> Unit,
-) : MethodVisitor(Opcodes.ASM9, probeInserter) {
-
-    private companion object {
-        const val COMPOSABLE_DESCRIPTOR = "Landroidx/compose/runtime/Composable;"
-    }
-
-    override fun visitAnnotation(descriptor: String?, visible: Boolean): AnnotationVisitor? {
-        if (descriptor == COMPOSABLE_DESCRIPTOR) {
-            probeInserter.isComposable = true
-        }
-        return super.visitAnnotation(descriptor, visible)
-    }
-
-    override fun visitEnd() {
-        super.visitEnd()
-        onEnd(probeInserter.probeCount)
-    }
-}
-
-/**
- * Deferred <clinit> visitor that prepends probe initialization.
- * Uses a lambda to get the total probe count which isn't known until all methods are visited.
- *
- * Note: In AGP's transform pipeline, the class bytes are written after visitEnd(),
- * so we emit the LDC for probe count during visitCode(). This means we need
- * to know the count at visitCode() time, which isn't ideal. As a workaround,
- * we always emit the init call — if totalProbeCount is 0, the probes array
- * is just empty, which is harmless.
- */
-private class DeferredClinitVisitor(
-    private val classId: Long,
-    private val className: String,
-    delegate: MethodVisitor,
-    private val probeCountProvider: () -> Int,
-) : MethodVisitor(Opcodes.ASM9, delegate) {
-
-    private var codeVisited = false
-
-    override fun visitCode() {
-        super.visitCode()
-        codeVisited = true
-        // Emit a provisional init with count=0. The actual array will be
-        // re-initialized properly because the <clinit> runs at class load time
-        // and OmnivoreRuntime handles zero-count gracefully.
-        // In practice, AGP visits methods in order so other methods' probes
-        // haven't been counted yet — we accept this tradeoff.
-        emitProbeInit(mv, classId, className, 1024) // generous pre-allocation
-    }
-}
-
-private fun emitProbeInit(mv: MethodVisitor, classId: Long, className: String, probeCount: Int) {
-    mv.visitLdcInsn(classId)
-    mv.visitLdcInsn(className.replace('/', '.'))
-    emitIntPush(mv, probeCount)
-    mv.visitMethodInsn(
-        Opcodes.INVOKESTATIC,
-        OmnivoreRuntime.INTERNAL_NAME,
-        OmnivoreRuntime.GET_PROBES_METHOD,
-        OmnivoreRuntime.GET_PROBES_DESCRIPTOR,
-        false
-    )
-    mv.visitFieldInsn(
-        Opcodes.PUTSTATIC,
-        className,
-        ProbeInserter.PROBE_FIELD_NAME,
-        ProbeInserter.PROBE_FIELD_DESCRIPTOR
-    )
-}
-
-private fun emitIntPush(mv: MethodVisitor, value: Int) {
-    when {
-        value in -1..5 -> mv.visitInsn(Opcodes.ICONST_0 + value)
-        value in Byte.MIN_VALUE..Byte.MAX_VALUE -> mv.visitIntInsn(Opcodes.BIPUSH, value)
-        value in Short.MIN_VALUE..Short.MAX_VALUE -> mv.visitIntInsn(Opcodes.SIPUSH, value)
-        else -> mv.visitLdcInsn(value)
+        // Replay the buffered class through the instrumenting visitor. The probe
+        // map was built above, so pass null here — otherwise ProbeInserter would
+        // record every probe a second time.
+        accept(
+            InstrumentingClassVisitor(
+                classId = classId,
+                className = className,
+                classNode = this,
+                config = config,
+                totalProbeCount = totalProbeCount,
+                classProbeMap = null,
+                delegate = delegate,
+            )
+        )
     }
 }
