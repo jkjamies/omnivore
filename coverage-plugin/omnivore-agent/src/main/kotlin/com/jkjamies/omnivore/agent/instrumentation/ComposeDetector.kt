@@ -128,11 +128,6 @@ object ComposeDetector {
         return false
     }
 
-    private fun globMatches(pattern: String, text: String): Boolean {
-        val regex = pattern
-            .replace(".", "\\.")
-            .replace("*", ".*")
-            .replace("?", ".")
-        return Regex(regex).matches(text)
-    }
+    private fun globMatches(pattern: String, text: String): Boolean =
+        GlobPattern.matches(pattern, text)
 }

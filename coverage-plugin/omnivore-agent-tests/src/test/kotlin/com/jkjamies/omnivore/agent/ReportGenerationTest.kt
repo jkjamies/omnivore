@@ -241,7 +241,12 @@ class ReportGenerationTest {
         assertEquals(0L, result.summary.linesCovered)
         assertEquals(0L, result.summary.linesTotal)
         assertEquals(0.0, result.summary.lineRate)
-        assertEquals(1.0, result.summary.branchRate) // no branches = 100%
+        // No branches now reports 0.0, not 1.0. "100% of nothing" reads as a
+        // perfect score and, once summed into directory and project rollups,
+        // silently pulled real aggregates upward. Consumers distinguish the two
+        // cases with branchesTotal, which is 0 here.
+        assertEquals(0.0, result.summary.branchRate)
+        assertEquals(0L, result.summary.branchesTotal)
     }
 
     // -- JSON report --
