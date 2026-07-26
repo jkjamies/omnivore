@@ -14,11 +14,21 @@ tests/fixtures/        Test fixtures (currently empty)
 ## Build & Test
 
 ```sh
-# DATABASE_URL required for sqlx compile-time query checking.
-# The database must exist with tables created (run the server once, or create manually).
+# DATABASE_URL is required: sqlx checks every query!/query_as! macro against a
+# real database at compile time, so the tables must already exist. Create them
+# from the shared schema — do NOT try to "run the server once" first, since the
+# server cannot be built without this.
+sqlite3 omnivore.db < crates/omnivore-core/schema.sql
+
 DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
 DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo test
 ```
+
+`crates/omnivore-core/schema.sql` is the single source of truth for table
+creation: `Database::run_migrations` executes it via `include_str!` at startup,
+the Dockerfile applies it to build the sqlx check database, and CI does the
+same. Guarded `ALTER TABLE` migrations for older deployments stay in
+`run_migrations`; **a new column must be added in both places.**
 
 Binary name: `omnivore-dashboard`
 License: **Apache-2.0**

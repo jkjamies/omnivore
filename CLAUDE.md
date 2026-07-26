@@ -33,8 +33,13 @@ Each sub-project has its own `CLAUDE.md` with detailed architecture, build comma
 # Plugin (Gradle 8.12, Kotlin 2.1.10, Java 17)
 cd coverage-plugin && ./gradlew build
 
-# Dashboard (Rust 2024 edition — DATABASE_URL required for sqlx compile-time checks)
-cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
+# Dashboard (Rust 2024 edition)
+# sqlx checks every query at COMPILE time against a real database, so the
+# tables must exist before `cargo build` — create them from the shared schema.
+# Do not try to "run the server once" first; it cannot be built without this.
+cd dashboard \
+  && sqlite3 omnivore.db < crates/omnivore-core/schema.sql \
+  && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
 
 # KMP test rig (requires plugin build first — uses composite build)
 cd test-rigs/kmp-test-rig && ./gradlew test omnivoreReport
@@ -62,7 +67,7 @@ cd coverage-plugin && ./gradlew test
 cd coverage-plugin && ./gradlew :omnivore-agent-tests:test --tests ComposeDetectorTest
 cd coverage-plugin && ./gradlew :omnivore-agent-tests:test --tests "*.ComposeDetectorTest.testMethodName"
 
-# Dashboard — all tests
+# Dashboard — all tests (needs the schema applied, as above)
 cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo test
 
 # Dashboard — single test
@@ -128,6 +133,10 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=jacoco&project
 
 ## CI/CD
 
+- **`dashboard.yml`** — dashboard changes: build, test, `docker build`, and a health smoke test
+- **`plugin.yml`** — plugin changes: Gradle build + agent/plugin unit tests
 - **`coverage.yml`** — push to `main` + PRs: build kmp-test-rig, generate report, upload to dashboard
 - **`publish.yml`** — `v*` tags: publish agent + plugin to Maven Central (OSSRH) + Gradle Plugin Portal
 - See `coverage-plugin/PUBLISHING-REQUIRED.md` for one-time setup checklist
+
+`dashboard.yml` runs `cargo fmt`/`clippy` as advisory (`continue-on-error`) because the tree predates any such gate; `cargo test` and the Docker build gate. Run `cargo fmt --all` once, then make both hard failures.

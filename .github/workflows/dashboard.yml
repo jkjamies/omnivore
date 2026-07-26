@@ -1,0 +1,81 @@
+name: Dashboard
+
+# The dashboard had no CI of its own, which is how a broken `docker build` and
+# a test suite that could not compile both reached main unnoticed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - '.github/workflows/dashboard.yml'
+  pull_request:
+    paths:
+      - 'dashboard/**'
+      - '.github/workflows/dashboard.yml'
+
+defaults:
+  run:
+    working-directory: dashboard
+
+env:
+  CARGO_TERM_COLOR: always
+  # sqlx checks queries against this at compile time; it is created from the
+  # same schema.sql the server applies at startup.
+  DATABASE_URL: sqlite:ci.db?mode=rwc
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dashboard
+
+      - name: Create build database
+        run: sqlite3 ci.db < crates/omnivore-core/schema.sql
+
+      # Advisory for now: the tree predates any rustfmt/clippy gate, so
+      # enforcing them here would fail on ~180 pre-existing diffs unrelated to
+      # whatever a PR actually changed. Run `cargo fmt --all` once, then flip
+      # both of these to hard failures (drop `continue-on-error`, add
+      # `-D warnings` to clippy).
+      - name: Check formatting (advisory)
+        run: cargo fmt --all --check
+        continue-on-error: true
+
+      - name: Clippy (advisory)
+        run: cargo clippy --all-targets
+        continue-on-error: true
+
+      # This one gates.
+      - name: Test
+        run: cargo test --all-targets
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build image
+        run: docker build -t omnivore-dashboard:ci .
+
+      - name: Smoke test the image
+        run: |
+          docker run -d --name omnivore-ci -p 3000:3000 omnivore-dashboard:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/v1/health; then
+              echo "dashboard is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "dashboard did not become healthy"
+          docker logs omnivore-ci
+          exit 1

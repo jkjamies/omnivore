@@ -33,63 +33,34 @@ impl Database {
         Ok(db)
     }
 
+    /// Table creation DDL, shared with the build-time sqlx database.
+    ///
+    /// See `crates/omnivore-core/schema.sql` for why this lives in a file
+    /// rather than inline here.
+    pub const SCHEMA_SQL: &'static str = include_str!("../../schema.sql");
+
     async fn run_migrations(&self) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                github_repo TEXT,
-                source_root TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
+        // Order matters, in three phases.
+        //
+        // On an *existing* database `CREATE TABLE IF NOT EXISTS` is a no-op, so
+        // a table keeps whatever columns it already had. Any index over a
+        // column that only the ALTER phase adds must therefore be created
+        // *after* that phase — otherwise upgrading an older deployment fails
+        // with "no such column" and the server refuses to start. Indexes are
+        // split out by inspection rather than by convention so this cannot
+        // regress when a new index is added to schema.sql.
+        let (indexes, tables): (Vec<&str>, Vec<&str>) = Self::schema_statements()
+            .partition(|s| s.to_ascii_uppercase().starts_with("CREATE INDEX"));
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS coverage_snapshots (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL REFERENCES projects(id),
-                commit_sha TEXT,
-                branch TEXT,
-                target TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'omnivore-agent',
-                line_rate REAL NOT NULL,
-                branch_rate REAL NOT NULL,
-                lines_covered INTEGER NOT NULL,
-                lines_total INTEGER NOT NULL,
-                branches_covered INTEGER NOT NULL,
-                branches_total INTEGER NOT NULL,
-                file_count INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                files_json TEXT,
-                dependencies_json TEXT
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
+        // Phase 1: tables and seed rows. Creates everything on a fresh install;
+        // no-ops on an existing one.
+        for statement in tables {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_snapshots_project
-             ON coverage_snapshots(project_id, created_at DESC)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS source_cache (
-                repo TEXT NOT NULL,
-                path TEXT NOT NULL,
-                commit_ref TEXT NOT NULL DEFAULT '',
-                content TEXT NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (repo, path, commit_ref)
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
+        // Phase 2: the guarded ALTER TABLEs below upgrade databases created by
+        // earlier versions, which predate columns the schema file now declares.
+        // They are no-ops on a fresh database.
 
         // Migration: add dependencies_json column if it doesn't exist
         // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check the schema.
@@ -186,23 +157,6 @@ impl Database {
                 .await?;
         }
 
-        // Global settings table (single row, id=1)
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS settings (
-                id INTEGER PRIMARY KEY CHECK(id = 1),
-                default_line_threshold REAL NOT NULL DEFAULT 0.8,
-                default_branch_threshold REAL NOT NULL DEFAULT 0.8,
-                default_line_warn_threshold REAL NOT NULL DEFAULT 0.5,
-                default_branch_warn_threshold REAL NOT NULL DEFAULT 0.5
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query("INSERT OR IGNORE INTO settings (id) VALUES (1)")
-            .execute(&self.pool)
-            .await?;
-
         // Migration: add warning threshold columns to settings if missing
         let has_settings_warn: bool = sqlx::query_scalar::<_, i32>(
             "SELECT COUNT(*) FROM pragma_table_info('settings') WHERE name = 'default_line_warn_threshold'"
@@ -271,60 +225,33 @@ impl Database {
                 .await?;
         }
 
-        // API keys table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS api_keys (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                key_hash TEXT NOT NULL,
-                key_prefix TEXT NOT NULL,
-                project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-                created_at TEXT NOT NULL,
-                last_used_at TEXT
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Sessions table (OAuth)
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                github_username TEXT NOT NULL,
-                github_token TEXT NOT NULL,
-                avatar_url TEXT,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Permission cache table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS permission_cache (
-                user_id TEXT NOT NULL,
-                repo TEXT NOT NULL,
-                permission TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                PRIMARY KEY (user_id, repo)
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
         // Enable foreign keys for CASCADE support
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&self.pool)
             .await?;
 
+        // Phase 3: indexes, now that every column they reference exists.
+        for statement in indexes {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
+
         Ok(())
+    }
+
+    /// Split [`Self::SCHEMA_SQL`] into executable statements.
+    ///
+    /// Statements are separated by a semicolon at end of line; comment lines are
+    /// stripped first, so a statement preceded by a comment block is not
+    /// mistaken for a comment and skipped whole.
+    fn schema_statements() -> impl Iterator<Item = &'static str> {
+        Self::SCHEMA_SQL.split(";\n").filter_map(|chunk| {
+            let mut rest = chunk.trim_start();
+            while let Some(stripped) = rest.strip_prefix("--") {
+                rest = stripped.find('\n').map(|i| &stripped[i + 1..]).unwrap_or("").trim_start();
+            }
+            let rest = rest.trim();
+            if rest.is_empty() { None } else { Some(rest) }
+        })
     }
 
     // -- Projects --

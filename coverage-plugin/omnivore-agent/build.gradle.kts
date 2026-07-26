@@ -17,6 +17,7 @@ dependencies {
     compileOnly("junit:junit:4.13.2")
 
     testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 tasks.jar {
