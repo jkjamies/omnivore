@@ -52,29 +52,7 @@ pub async fn ingest_coverage(
     Query(params): Query<IngestParams>,
     body: String,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
-    // API key authentication (backwards-compatible: skip if no keys exist)
-    let has_keys = db.any_api_keys_exist().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}"))
-    })?;
-
-    let validated_key = if has_keys {
-        let raw_key = headers
-            .get("X-API-Key")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                (StatusCode::UNAUTHORIZED, "Missing X-API-Key header".to_string())
-            })?;
-
-        let api_key = db.validate_api_key(raw_key).await.map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}"))
-        })?;
-
-        Some(api_key.ok_or_else(|| {
-            (StatusCode::UNAUTHORIZED, "Invalid API key".to_string())
-        })?)
-    } else {
-        None
-    };
+    let validated_key = crate::routes::api_auth::authenticate_write(&db, &headers).await?;
 
     let format = match &params.format {
         Some(f) => CoverageFormat::from_str_loose(f)
@@ -129,27 +107,21 @@ pub async fn ingest_coverage(
     };
 
     // Project-scoped key: verify it matches the project being uploaded to
-    if let Some(ref key) = validated_key {
-        if let Some(ref key_project_id) = key.project_id {
-            if key_project_id != &snapshot.project_id {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    format!(
-                        "API key is scoped to project '{}', cannot upload to '{}'",
-                        key_project_id, snapshot.project_id
-                    ),
-                ));
-            }
-        }
-    }
+    crate::routes::api_auth::enforce_project_scope(
+        validated_key.as_ref(),
+        &snapshot.project_id,
+    )?;
 
     let project_name = report.project.name.clone();
     let ratchet = db.ingest_snapshot(&snapshot, Some(&project_name))
         .await
         .map_err(|e| {
+            // Don't hand raw sqlx errors (schema, paths, constraint names) to
+            // an unauthenticated caller.
+            tracing::error!(error = %e, project_id = %snapshot.project_id, "Snapshot ingest failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Storage error: {e}"),
+                "Failed to store coverage snapshot".to_string(),
             )
         })?;
 
@@ -173,12 +145,45 @@ pub async fn ingest_coverage(
 
     // Post PR comment if GitHub params are provided
     if let (Some(repo), Some(pr_number)) = (&params.github_repo, params.pr_number) {
-        // Token from header takes priority, then server env var
-        let github_token = headers
+        // The caller names both the repo and the PR number, and the server may
+        // hold a GITHUB_TOKEN with write access to many repositories. Without a
+        // check, anyone able to reach ingest could make the dashboard post
+        // arbitrary comments anywhere that token reaches, under the operator's
+        // identity. So:
+        //   * the slug must be well-formed, and
+        //   * the server's own token is only used when the repo matches what
+        //     the project is configured with. A caller supplying their own
+        //     X-GitHub-Token is spending their own authority and is fine.
+        let caller_token = headers
             .get("X-GitHub-Token")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| std::env::var("GITHUB_TOKEN").ok());
+            .map(|s| s.to_string());
+
+        let github_token = if !omnivore_core::validation::is_valid_repo_slug(repo) {
+            tracing::warn!(%repo, "Refusing PR comment: malformed repository slug");
+            None
+        } else if caller_token.is_some() {
+            caller_token
+        } else {
+            let linked_repo = db
+                .get_project(&snapshot.project_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|p| p.github_repo);
+
+            match linked_repo {
+                Some(ref linked) if linked == repo => std::env::var("GITHUB_TOKEN").ok(),
+                _ => {
+                    tracing::warn!(
+                        %repo,
+                        project_id = %snapshot.project_id,
+                        "Refusing to use the server GITHUB_TOKEN for a repo the project is not linked to"
+                    );
+                    None
+                }
+            }
+        };
 
         if let Some(token) = github_token {
             let base_branch = params.base_branch.as_deref().unwrap_or("main");
@@ -199,7 +204,10 @@ pub async fn ingest_coverage(
                 tracing::warn!("Failed to post PR comment to {repo}#{pr_number}: {e}");
             }
         } else {
-            tracing::warn!("PR comment requested but GITHUB_TOKEN not set");
+            tracing::warn!(
+                "PR comment requested but no usable token — pass X-GitHub-Token, \
+                 or link the project to {repo} and set GITHUB_TOKEN on the server"
+            );
         }
     }
 

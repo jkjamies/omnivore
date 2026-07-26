@@ -3,11 +3,68 @@ pub mod routes;
 pub use routes::auth::OAuthConfig;
 pub use routes::health::init_uptime;
 
+use axum::http::{header, HeaderValue, Method};
 use axum::{routing, Router};
 use omnivore_core::storage::Database;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
+
+/// Maximum accepted ingest body.
+///
+/// Axum's default extractor limit is 2 MiB, which real multi-module coverage
+/// reports exceed — but the endpoint is reachable before authentication in open
+/// mode, so it needs *a* ceiling rather than none. 32 MiB by default,
+/// overridable with `OMNIVORE_MAX_UPLOAD_BYTES`.
+const DEFAULT_MAX_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
+
+fn max_upload_bytes() -> usize {
+    std::env::var("OMNIVORE_MAX_UPLOAD_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MAX_UPLOAD_BYTES)
+}
+
+/// Build the CORS layer.
+///
+/// The previous `CorsLayer::permissive()` allowed any origin, method and
+/// header on every route including ingest. For a self-hosted dashboard the
+/// right default is same-origin only; operators who genuinely embed badges or
+/// call the API cross-origin list their origins in `OMNIVORE_CORS_ORIGINS`
+/// (comma-separated, or `*` to restore the old wide-open behaviour).
+fn cors_layer() -> CorsLayer {
+    let configured = std::env::var("OMNIVORE_CORS_ORIGINS").unwrap_or_default();
+    let configured = configured.trim();
+
+    if configured.is_empty() {
+        return CorsLayer::new();
+    }
+
+    if configured == "*" {
+        tracing::warn!("OMNIVORE_CORS_ORIGINS=* — every origin may call this API");
+        return CorsLayer::permissive();
+    }
+
+    let origins: Vec<HeaderValue> = configured
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| match HeaderValue::from_str(s) {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(origin = %s, "Ignoring malformed CORS origin");
+                None
+            }
+        })
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+}
 
 /// Build the application router. Extracted so integration tests can reuse it.
 pub fn build_router(db: Database) -> Router {
@@ -32,7 +89,11 @@ pub fn build_router(db: Database) -> Router {
             routes::auth::require_admin_middleware,
         ));
 
-    // -- Project settings (login-required when OAuth is enabled) --
+    // -- Project settings --
+    //
+    // These all mutate (or expose the API keys of) a specific project, so they
+    // require write access to *that* project — not merely a logged-in
+    // account, which is what `require_login_middleware` used to check here.
     let project_settings_routes = Router::new()
         .route(
             "/projects/{project_id}/settings",
@@ -64,7 +125,7 @@ pub fn build_router(db: Database) -> Router {
         )
         .layer(axum::middleware::from_fn_with_state(
             db.clone(),
-            routes::auth::require_login_middleware,
+            routes::auth::require_project_write_middleware,
         ));
 
     // -- All other routes (open — no auth required) --
@@ -116,7 +177,8 @@ pub fn build_router(db: Database) -> Router {
         // API: Coverage ingestion
         .route(
             "/api/v1/ingest/coverage",
-            routing::post(routes::coverage::ingest_coverage),
+            routing::post(routes::coverage::ingest_coverage)
+                .layer(axum::extract::DefaultBodyLimit::max(max_upload_bytes())),
         )
         // API: Coverage queries
         .route(
@@ -143,7 +205,35 @@ pub fn build_router(db: Database) -> Router {
         )
         // Static files
         .nest_service("/static", ServeDir::new(static_dir))
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer())
+        // A CSP is the backstop for the HTML views: templates escape their
+        // inputs, but coverage reports are attacker-supplied on an open
+        // instance, so a missed spot should not become script execution.
+        // 'unsafe-inline' is still required — the pages carry inline
+        // <script> blocks and style attributes — so this bounds *where*
+        // script may come from rather than eliminating injection risk.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; \
+                 script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; \
+                 style-src 'self' 'unsafe-inline'; \
+                 img-src 'self' data: https://avatars.githubusercontent.com; \
+                 connect-src 'self'; \
+                 frame-ancestors 'none'; \
+                 base-uri 'none'; \
+                 form-action 'self'; \
+                 object-src 'none'",
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(db.clone());
 
@@ -152,6 +242,7 @@ pub fn build_router(db: Database) -> Router {
         let auth_routes = Router::new()
             .route("/auth/login", routing::get(routes::auth::login))
             .with_state(oauth_config.clone())
+            // `state` is verified against a cookie set by /auth/login
             .route(
                 "/auth/callback",
                 routing::get(routes::auth::callback),

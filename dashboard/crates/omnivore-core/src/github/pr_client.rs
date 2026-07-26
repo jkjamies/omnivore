@@ -1,4 +1,5 @@
 use super::comment::COMMENT_MARKER;
+use crate::validation::is_valid_repo_slug;
 use serde::{Deserialize, Serialize};
 
 /// GitHub API client for posting PR comments.
@@ -39,6 +40,13 @@ impl GitHubClient {
         pr_number: u64,
         body: &str,
     ) -> Result<(), String> {
+        // `repo` is interpolated straight into the API path. Reject anything
+        // that isn't a plain `owner/name` so a caller can't smuggle extra path
+        // segments and retarget the request at a different endpoint.
+        if !is_valid_repo_slug(repo) {
+            return Err(format!("Invalid repository slug: {repo}"));
+        }
+
         // Try to find an existing Omnivore comment
         let existing_id = self.find_existing_comment(repo, pr_number).await?;
 

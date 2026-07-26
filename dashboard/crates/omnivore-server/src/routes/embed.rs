@@ -25,10 +25,12 @@ pub async fn trend_embed(
     Path(project_id): Path<String>,
     Query(params): Query<EmbedQuery>,
 ) -> Response {
-    let limit = params.limit.unwrap_or(30);
+    let limit = params.limit.unwrap_or(30).clamp(1, 365);
     let metric = params.metric.as_deref().unwrap_or("line");
-    let width = params.width.unwrap_or(400.0);
-    let height = params.height.unwrap_or(120.0);
+    // Clamp rather than trust: an unbounded (or NaN) width reaches the SVG
+    // geometry directly and produces a broken or absurdly large image.
+    let width = clamp_dimension(params.width, 400.0, 120.0, 4000.0);
+    let height = clamp_dimension(params.height, 120.0, 60.0, 2000.0);
     let dark = params.theme.as_deref() == Some("dark");
 
     let snapshots = if let Some(target) = &params.target {
@@ -84,10 +86,48 @@ pub async fn trend_embed(
         [
             (header::CONTENT_TYPE, "image/svg+xml"),
             (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+            // An SVG opened directly is a document, not an image: without a
+            // restrictive CSP any markup that survived escaping would execute
+            // on the dashboard's own origin.
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         svg,
     )
         .into_response()
+}
+
+fn clamp_dimension(value: Option<f64>, default: f64, min: f64, max: f64) -> f64 {
+    match value {
+        Some(v) if v.is_finite() => v.clamp(min, max),
+        _ => default,
+    }
+}
+
+/// Escape text for interpolation into SVG/XML character data.
+///
+/// The project name reaches this from the ingest endpoint, which is
+/// unauthenticated on a default install — so a name like
+/// `<script>…</script>` would otherwise be stored and then executed for
+/// anyone who opened the embed URL directly.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            // Drop control characters — they are not well-formed XML.
+            c if c.is_control() && c != '\t' => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn render_trend_svg(
@@ -182,6 +222,9 @@ fn render_trend_svg(
         "branch" => "Branch",
         _ => "Line",
     };
+    // The only free-form text in the document; everything else is a number or
+    // an internal constant.
+    let project_name = xml_escape(project_name);
 
     let mut svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
