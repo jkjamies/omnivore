@@ -30,7 +30,7 @@ Each sub-project has its own `CLAUDE.md` with detailed architecture, build comma
 ### Build Everything
 
 ```sh
-# Plugin (Gradle 8.12, Kotlin 2.1.10, Java 17)
+# Plugin (Gradle 9.4.1, Kotlin 2.3.21, Java 17 toolchain)
 cd coverage-plugin && ./gradlew build
 
 # Dashboard (Rust 2024 edition)
