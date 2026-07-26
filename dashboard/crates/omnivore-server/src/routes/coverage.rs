@@ -235,12 +235,80 @@ pub struct IngestResponse {
     pub warnings: Vec<String>,
 }
 
+/// Selects one `(target, source)` coverage series.
+///
+/// A project routinely holds several series at once — unit and instrumented
+/// tests, or the same target measured by both the Omnivore agent and Kover.
+/// Without a selector these endpoints answered "the most recently written row",
+/// which alternates between series as CI runs and makes a trend line into a
+/// sawtooth between two unrelated measurements. The HTML pages have always
+/// iterated series properly; this brings the JSON API in line.
+#[derive(Deserialize, Default)]
+pub struct SeriesParams {
+    /// Execution environment, e.g. `JVM_UNIT`.
+    pub target: Option<String>,
+    /// Producing tool, e.g. `kover`.
+    pub source: Option<String>,
+}
+
+impl SeriesParams {
+    fn target(&self) -> Option<&str> {
+        self.target.as_deref().filter(|s| !s.is_empty())
+    }
+    fn source(&self) -> Option<&str> {
+        self.source.as_deref().filter(|s| !s.is_empty())
+    }
+}
+
+/// Resolve the series to serve when the caller did not fully specify one.
+///
+/// Picking the newest row would silently alternate between series, so instead
+/// fall back to the project's single series when there is exactly one, and ask
+/// the caller to choose when there is more than one. Being explicit beats
+/// returning a plausible-looking number from an arbitrary series.
+async fn resolve_series(
+    db: &Database,
+    project_id: &str,
+    params: &SeriesParams,
+) -> Result<(String, String), StatusCode> {
+    let series = db
+        .get_series_for_project(project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if series.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let matches: Vec<&(String, String)> = series
+        .iter()
+        .filter(|(t, s)| {
+            params.target().is_none_or(|want| want.eq_ignore_ascii_case(t))
+                && params.source().is_none_or(|want| want.eq_ignore_ascii_case(s))
+        })
+        .collect();
+
+    match matches.as_slice() {
+        [] => Err(StatusCode::NOT_FOUND),
+        [only] => Ok((only.0.clone(), only.1.clone())),
+        // Ambiguous. 300 tells the caller their request matched more than one
+        // series and they must narrow it, rather than handing back one at random.
+        _ => Err(StatusCode::MULTIPLE_CHOICES),
+    }
+}
+
 /// Get the latest coverage snapshot for a project.
+///
+/// Accepts `?target=` and `?source=` to select a series. With a single series
+/// the parameters are optional; with several, one must be given.
 pub async fn get_latest(
     State(db): State<Database>,
     Path(project_id): Path<String>,
+    Query(params): Query<SeriesParams>,
 ) -> Result<Json<CoverageSnapshot>, StatusCode> {
-    db.get_latest_snapshot(&project_id)
+    let (target, source) = resolve_series(&db, &project_id, &params).await?;
+
+    db.get_latest_snapshot_by_series(&project_id, &target, &source)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
@@ -253,9 +321,11 @@ pub async fn get_trend(
     Path(project_id): Path<String>,
     Query(params): Query<TrendParams>,
 ) -> Result<Json<Vec<TrendPoint>>, StatusCode> {
-    let limit = params.limit.unwrap_or(30);
+    let limit = params.limit.unwrap_or(30).clamp(1, 1000);
+    let (target, source) = resolve_series(&db, &project_id, &params.series).await?;
+
     let snapshots = db
-        .get_snapshots_for_project(&project_id, limit)
+        .get_snapshots_for_project_by_series(&project_id, &target, &source, limit)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -265,6 +335,7 @@ pub async fn get_trend(
             commit_sha: s.commit_sha,
             branch: s.branch,
             target: s.target,
+            source: s.source,
             line_rate: s.line_rate,
             branch_rate: s.branch_rate,
             lines_covered: s.lines_covered,
@@ -279,6 +350,33 @@ pub async fn get_trend(
 #[derive(Deserialize)]
 pub struct TrendParams {
     pub limit: Option<i64>,
+    #[serde(flatten)]
+    pub series: SeriesParams,
+}
+
+/// List the `(target, source)` series a project has, so a caller hitting a
+/// `300 Multiple Choices` from the endpoints above can pick one.
+pub async fn list_series(
+    State(db): State<Database>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Vec<SeriesInfo>>, StatusCode> {
+    let series = db
+        .get_series_for_project(&project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(
+        series
+            .into_iter()
+            .map(|(target, source)| SeriesInfo { target, source })
+            .collect(),
+    ))
+}
+
+#[derive(Serialize)]
+pub struct SeriesInfo {
+    pub target: String,
+    pub source: String,
 }
 
 #[derive(Serialize)]
@@ -286,6 +384,7 @@ pub struct TrendPoint {
     pub commit_sha: Option<String>,
     pub branch: Option<String>,
     pub target: String,
+    pub source: String,
     pub line_rate: f64,
     pub branch_rate: f64,
     pub lines_covered: i64,

@@ -8,8 +8,11 @@ use serde::Deserialize;
 pub struct BadgeQuery {
     /// Which metric to display: "line" (default) or "branch"
     metric: Option<String>,
-    /// Optional target filter (e.g., "JvmUnit", "AndroidInstrumented")
+    /// Optional target filter (e.g., "JVM_UNIT", "ANDROID_INSTRUMENTED")
     target: Option<String>,
+    /// Optional provenance filter (e.g., "kover"), for projects that measure
+    /// the same target with more than one tool.
+    source: Option<String>,
 }
 
 pub async fn badge(
@@ -19,11 +22,14 @@ pub async fn badge(
 ) -> Response {
     let metric = params.metric.as_deref().unwrap_or("line");
 
-    let snapshot = if let Some(target) = &params.target {
-        db.get_latest_snapshot_by_target(&project_id, target).await.ok().flatten()
-    } else {
-        db.get_latest_snapshot(&project_id).await.ok().flatten()
-    };
+    // A badge is a single number, so it has to name a single series. With no
+    // filter the previous code took the most recent row of any series, so a
+    // project running both unit and instrumented tests showed whichever
+    // finished last — the badge changed meaning between CI runs without
+    // anything changing in the code. Prefer an unambiguous match; fall back to
+    // "unknown" rather than displaying an arbitrary series as if it were the
+    // project's coverage.
+    let snapshot = resolve_badge_snapshot(&db, &project_id, &params).await;
 
     // Resolve effective thresholds for badge colors
     let project = db.get_project(&project_id).await.ok().flatten();
@@ -62,6 +68,40 @@ pub async fn badge(
         svg,
     )
         .into_response()
+}
+
+/// Pick the single series a badge should show.
+///
+/// Returns `None` when the filters match no series, or match more than one and
+/// the caller has not narrowed it — the badge then reads "unknown", which is
+/// honest, instead of silently picking one.
+async fn resolve_badge_snapshot(
+    db: &Database,
+    project_id: &str,
+    params: &BadgeQuery,
+) -> Option<omnivore_core::model::coverage::CoverageSnapshot> {
+    let series = db.get_series_for_project(project_id).await.ok()?;
+
+    let wanted_target = params.target.as_deref().filter(|s| !s.is_empty());
+    let wanted_source = params.source.as_deref().filter(|s| !s.is_empty());
+
+    let matches: Vec<&(String, String)> = series
+        .iter()
+        .filter(|(t, s)| {
+            wanted_target.is_none_or(|w| w.eq_ignore_ascii_case(t))
+                && wanted_source.is_none_or(|w| w.eq_ignore_ascii_case(s))
+        })
+        .collect();
+
+    let (target, source) = match matches.as_slice() {
+        [only] => (&only.0, &only.1),
+        _ => return None,
+    };
+
+    db.get_latest_snapshot_by_series(project_id, target, source)
+        .await
+        .ok()
+        .flatten()
 }
 
 fn render_badge(label: &str, value: &str, color: &str) -> String {
