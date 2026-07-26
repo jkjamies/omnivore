@@ -26,3 +26,8 @@ Thumbs.db
 # Gradle properties (may contain API keys)
 gradle.properties
 
+
+# Omnivore coverage artifacts (execution data, probe maps, instrumentation stats)
+*.omnivore
+*.probes
+*.stats

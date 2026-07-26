@@ -8,6 +8,7 @@ dependencies {
     testImplementation(libs.asm.core)
     testImplementation(libs.asm.tree)
     testImplementation(libs.asm.util)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 kotlin {
