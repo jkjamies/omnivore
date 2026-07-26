@@ -14,8 +14,22 @@ async fn test_db() -> Database {
 /// Helper: make a request and return (status, body bytes).
 async fn send(
     db: Database,
-    req: Request<Body>,
+    mut req: Request<Body>,
 ) -> (hyper::StatusCode, Vec<u8>) {
+    // Ingest is rate-limited per client, and a request with no peer address and
+    // no `X-Forwarded-For` is keyed as "unknown" — so every test in this file
+    // would share a single bucket. The suite already makes tens of ingest calls
+    // inside one window; a few more and it would start collecting 429s, which
+    // read as a coverage defect rather than as a limiter artifact.
+    //
+    // Give each request its own identity unless a test set one deliberately.
+    if !req.headers().contains_key("x-forwarded-for") {
+        static NEXT_CLIENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT_CLIENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        req.headers_mut()
+            .insert("x-forwarded-for", format!("test-client-{n}").parse().unwrap());
+    }
+
     let app = build_router(db);
     let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
@@ -710,13 +724,6 @@ async fn retention_prunes_old_snapshots() {
     // The 2 oldest remaining should have files_json = None (summary-only)
     let without_files: Vec<_> = all.iter().filter(|s| s.files_json.is_none()).collect();
     assert_eq!(without_files.len(), 2, "Expected 2 summary-only snapshots, got {}", without_files.len());
-
-    // Clean up env vars
-    // SAFETY: test runs single-threaded for this env manipulation
-    unsafe {
-        std::env::remove_var("OMNIVORE_RETENTION_FULL");
-        std::env::remove_var("OMNIVORE_RETENTION_SUMMARY");
-    }
 }
 
 // ── Security regressions ────────────────────────────────────────────────
@@ -1250,13 +1257,12 @@ async fn trend_returns_a_single_series() {
 /// Auto-create is convenient by default but must be closable.
 #[tokio::test]
 async fn project_autocreate_can_be_disabled() {
-    let db = test_db().await;
+    // Pin the setting on this Database rather than in the environment. Setting
+    // it process-wide made every other test that was mid-ingest at that instant
+    // fail intermittently, since they all read the same variable.
+    let db = test_db().await.with_project_autocreate(false);
 
-    // SAFETY: this test does not run concurrently with others touching this var.
-    unsafe { std::env::set_var("OMNIVORE_ALLOW_PROJECT_AUTOCREATE", "false") };
     let status = ingest(&db, report_with("unknown-project", "X", "a/B.kt")).await;
-    unsafe { std::env::remove_var("OMNIVORE_ALLOW_PROJECT_AUTOCREATE") };
-
     assert_eq!(status, 500, "ingest to an unknown project should be refused");
 
     let req = Request::get("/api/v1/projects").body(Body::empty()).unwrap();

@@ -30,6 +30,16 @@ the Dockerfile applies it to build the sqlx check database, and CI does the
 same. Guarded `ALTER TABLE` migrations for older deployments stay in
 `run_migrations`; **a new column must be added in both places.**
 
+**Tests must not set process environment variables.** `cargo test` runs
+`#[tokio::test]`s concurrently in one process, and the request handlers read
+configuration from the environment, so a test that flips a variable changes
+behaviour for every test in flight at that moment. That produced a suite that
+failed roughly one run in ten. Where a test needs a non-default setting, plumb
+it through the type instead — `Database::with_project_autocreate` is the
+pattern. `routes/rate_limit.rs` is the exception: its own unit tests do
+manipulate `OMNIVORE_INGEST_RATE_LIMIT`, serialized behind an `ENV_LOCK`,
+because the value under test *is* the variable.
+
 Binary name: `omnivore-dashboard`
 License: **Apache-2.0**
 

@@ -23,6 +23,18 @@ pub struct RatchetResult {
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
+    /// Resolved once at construction rather than read from the environment on
+    /// every ingest.
+    ///
+    /// Reading it per call made the setting process-global *state*, which meant
+    /// a test could not exercise the closed mode without changing behaviour for
+    /// every other test running at the same moment — and that is exactly what
+    /// happened: `project_autocreate_can_be_disabled` set the variable while
+    /// ~40 concurrent `#[tokio::test]`s were ingesting, so an unrelated test
+    /// occasionally got a refusal it never asked for. A suite that fails
+    /// roughly one run in ten teaches people to press re-run, which is worse
+    /// than no suite.
+    allow_project_autocreate: bool,
 }
 
 impl Database {
@@ -48,9 +60,22 @@ impl Database {
             .connect_with(options)
             .await?;
 
-        let db = Self { pool };
+        let db = Self {
+            pool,
+            allow_project_autocreate: auto_create_projects(),
+        };
         db.run_migrations().await?;
         Ok(db)
+    }
+
+    /// Override whether ingest may create unseen projects.
+    ///
+    /// The environment decides this for a real server; this exists so a test
+    /// can pin the setting on one `Database` without mutating process state
+    /// that every other concurrently-running test also reads.
+    pub fn with_project_autocreate(mut self, allowed: bool) -> Self {
+        self.allow_project_autocreate = allowed;
+        self
     }
 
     /// Table creation DDL, shared with the build-time sqlx database.
@@ -1137,7 +1162,7 @@ impl Database {
     ) -> Result<RatchetResult, sqlx::Error> {
         // Ensure project exists
         if self.get_project(&snapshot.project_id).await?.is_none() {
-            if !auto_create_projects() {
+            if !self.allow_project_autocreate {
                 // Closed mode: a project must be created deliberately before
                 // it can receive coverage. Otherwise any caller who reaches
                 // ingest can mint rows for arbitrary project IDs — a typo in a
