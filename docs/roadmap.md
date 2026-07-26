@@ -27,7 +27,11 @@ See [features.md](features.md) for built features by tier and [future-ideas.md](
 
 - [ ] **SSO / SAML authentication**
 - [ ] **Audit logs** — settings changes, uploads, timestamps
-- [ ] **Inline AI suggestions** — dashboard calls AI API, renders inline
+- ~~**Inline AI suggestions** — dashboard calls AI API, renders inline~~
+      — dropped in favour of the MCP server; see
+      [PRODUCT-STRATEGY.md §4](PRODUCT-STRATEGY.md). Having the dashboard hold a
+      provider key, own prompt quality, and absorb per-call cost buys a
+      capability the user's existing tools already have.
 
 ## Strategic items (see PRODUCT-STRATEGY.md)
 
@@ -37,7 +41,15 @@ Not tier-assigned yet; listed here so they aren't lost in the backlog.
       by joining coverage against `git log`. Needs no LLM; neither competitor
       surfaces it well.
 - [ ] **MCP server** — expose coverage as tools a coding agent can query.
-      Highest differentiation per unit of effort on the list.
+      **Tentatively the plan for agent support**, in place of building LLM
+      features into the dashboard: Omnivore serves the data, the user's own
+      agent does the reasoning. Read-only tools over the existing REST API.
+      See [PRODUCT-STRATEGY.md §4](PRODUCT-STRATEGY.md) for the design sketch
+      and phasing.
+- [ ] **Read-scoped API token** — prerequisite for the above. API keys today
+      authorize writes only; reads are open or gated by an OAuth *session
+      cookie*, which a machine client cannot hold. Recommended fix is a `read`
+      scope on existing keys.
 - [ ] **Verification harness** — differential testing against JaCoCo over a real
       corpus. The review found several defects that produced entirely plausible
       numbers; nothing but an oracle catches that class of bug.
