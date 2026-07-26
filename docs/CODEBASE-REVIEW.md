@@ -579,6 +579,37 @@ found by the new tests:
 The duplicated instrumentation logic across the agent and AGP paths was the root
 cause of two of these, so both now run through one `ClassInstrumenter`.
 
+### Closing the gap that let the AGP path drift
+
+Sharing `ClassInstrumenter` fixed the divergence but not the reason it went
+unnoticed for so long: the build-time transform lived in the Gradle plugin
+module, which is `compileOnly` against AGP. Nothing in that module can be
+unit-tested without a full Android toolchain, so nothing in it was. A code path
+that no test can reach will drift again.
+
+Two changes make it reachable:
+
+- **The logic moved to the agent module.** `BuildTimeInstrumentingVisitor` has
+  no AGP types in its signature, so `omnivore-agent-tests` can drive it
+  directly. `OmnivoreClassVisitorFactory` keeps only what genuinely needs AGP:
+  the parameters and the `isInstrumentable` filter.
+- **`BuildTimeInstrumentationTest` is a differential test.** It runs the same
+  input class through both the build-time and load-time paths and asserts the
+  probe maps are *identical* — not merely both plausible. Probe indices are
+  positional, so a divergence means the same index refers to different source
+  lines on Android and on the JVM. That produces believable wrong numbers and no
+  error, which is the hardest kind of defect to notice. The test also pins the
+  three things that were actually wrong before: both edges of a conditional,
+  every switch arm plus `default`, and a 1201-probe class that loads and runs.
+
+Unit tests still stand in for AGP, so `android.yml` runs
+`omnivoreWriteBuildProbeMap` in the Android rig. That task depends on AGP's ASM
+transform tasks, so building it makes real AGP load the real factory and hand it
+every app class; the job then fails if the resulting probe map is missing or
+header-only. No emulator is involved — the failure modes worth catching here
+(factory fails to load, throws, or instruments nothing) all show up at build
+time.
+
 ## Part 3 — Architecture notes
 
 A few observations on how the system fits together, rather than defects.
@@ -621,3 +652,71 @@ than a stderr line. 1.16 was exactly this failure mode, and it was invisible
 until the code was read. A summary at the end of `omnivoreReport` — "instrumented
 412 classes, skipped 38 (12 no line numbers, 26 filtered)" — would make the next
 one obvious.
+
+## Part 4 — What is validated, and what isn't
+
+The review touched instrumentation, aggregation, authorization, and the build,
+which is most of the system. Not all of it could be exercised to the same
+depth, and the difference matters more than usual here: a coverage tool that is
+subtly wrong still produces numbers, so "it ran and printed something" is not
+evidence. This is the standing account of what backs each claim. **Update it
+when the balance changes** — an entry moving from the second list to the first
+is the point of most of the CI added above.
+
+### Two defects found while writing this section
+
+Both are in the tests rather than the product, which is the point — a suite
+that is not trustworthy cannot be evidence.
+
+- **The API suite was flaky, about one run in ten.**
+  `project_autocreate_can_be_disabled` set `OMNIVORE_ALLOW_PROJECT_AUTOCREATE`
+  in the process environment while ~40 other `#[tokio::test]`s were running
+  concurrently, and `Database::ingest_snapshot` read that variable on every
+  call. Any test that happened to be mid-ingest got a refusal it never asked
+  for. The setting is now resolved once in `Database::new` and stored on the
+  instance, with `with_project_autocreate` for tests — so the closed mode can be
+  exercised without changing behaviour for anyone else. (A comment in the test
+  claimed it "does not run concurrently with others touching this var"; every
+  ingesting test touches it.)
+- **The suite was approaching the ingest rate limit.** Requests built with
+  `axum::http::Request` have no peer address, so every one of them keyed to the
+  same rate-limit bucket, `"unknown"`. The suite makes tens of ingest calls
+  inside a single 60-second window against a default limit of 60. Nothing failed
+  yet; adding a handful more ingest tests would have produced 429s that look
+  like a coverage defect. The `send` helper now gives each request its own
+  client identity.
+
+### Verified by something that actually runs
+
+| Area | What backs it |
+|---|---|
+| Edge-based branch coverage | `BranchCoverageTest`, `EndToEndInstrumentationTest` — classes generated with ASM, instrumented, loaded, executed, probes asserted |
+| AGP build-time path | `BuildTimeInstrumentationTest` (differential against the agent path) locally; `android.yml` runs it under real AGP |
+| Probe index positionality | The differential test above: identical probe maps, or the build fails |
+| Dashboard aggregation, series resolution, retention | `omnivore-server/tests/api_tests.rs` against a real SQLite database |
+| Authorization, CSRF, rate limiting | Unit and API tests, plus a manual pass against a running server |
+| Migration of a pre-existing database | `migrates_a_database_created_by_an_older_version` — a regression test for a startup failure this review introduced and then caught |
+| Ingest of every supported format | Parser tests plus the test rigs; the Go rig has been driven end-to-end into a live dashboard |
+| `docker build` and a health check | `dashboard.yml` |
+| Plugin compiles against real AGP | `plugin.yml` |
+
+### Not verified, and what would verify it
+
+- **Android instrumented tests on a device.** `android.yml` proves the transform
+  runs and emits a probe map; it does not prove the on-device listener,
+  the logcat extraction, or `omnivorePullCoverage` still work. An
+  emulator job (`reactivecircus/android-emulator-runner`) would close this, at
+  real CI cost. Until then, the `ANDROID_INSTRUMENTED` path should be treated as
+  the least-exercised part of the plugin.
+- **Agreement with an independent implementation.** Nothing checks Omnivore's
+  numbers against JaCoCo's or Kover's on the same code. The rigs can already
+  produce both (`-Pomnivore.kover`, `-Pomnivore.jacoco`), so a differential
+  harness that ingests both and asserts they agree within a tolerance is
+  cheap and would catch whole classes of counting error. This is the single
+  highest-value test still missing.
+- **A KMP end-to-end run through `omnivoreReport` in this review's tree.** CI
+  does it on every push; it has not been done by hand since the branch-coverage
+  rewrite.
+- **Compose filtering against real Compose output.** `ComposeDetector` is tested
+  against hand-written approximations of what the Compose compiler emits, not
+  against its actual output, which changes between compiler versions.
