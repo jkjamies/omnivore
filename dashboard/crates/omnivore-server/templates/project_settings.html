@@ -17,6 +17,7 @@
   </div>
   <p class="settings-hint">Override global defaults for this project. Leave empty to inherit.</p>
   <form class="settings-form" method="post" action="/projects/{{ project.id }}/thresholds">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="settings-field">
       <label>Line coverage</label>
       <div class="settings-threshold-row">
@@ -79,6 +80,7 @@
   </div>
   <p class="settings-hint">Comma-separated labels for organizing projects (e.g., backend, mobile, critical).</p>
   <form class="settings-form" method="post" action="/projects/{{ project.id }}/tags">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="settings-field">
       <div class="settings-input-group" style="max-width:400px;">
         <input type="text" id="tags" name="tags"
@@ -100,6 +102,7 @@
     Uploads below the floor receive a warning. You can manually lower the floor below.
   </p>
   <form class="settings-form" method="post" action="/projects/{{ project.id }}/ratchet">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="settings-field">
       <label>
         <input type="checkbox" name="ratchet_enabled" {% if self.ratchet_enabled() %}checked{% endif %}>
@@ -195,6 +198,7 @@
           <td>{{ self.fmt_key_last_used(key) }}</td>
           <td>
             <form method="post" action="/projects/{{ project.id }}/api-keys/{{ key.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete API key &quot;{{ key.name }}&quot;?')">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="btn btn-danger btn-sm">Delete</button>
             </form>
           </td>
@@ -205,6 +209,7 @@
   {% endif %}
 
   <form method="post" action="/projects/{{ project.id }}/api-keys" class="api-key-create-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="text" name="name" placeholder="Key name (e.g., CI Pipeline)" required>
     <button type="submit" class="btn">Create Key</button>
   </form>
@@ -216,6 +221,7 @@
   </div>
   <p class="settings-hint">Permanently delete this project and all its coverage data. This cannot be undone.</p>
   <form method="post" action="/projects/{{ project.id }}/delete" onsubmit="return confirmDelete()">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn-danger">Delete Project</button>
   </form>
 </div>

@@ -80,7 +80,23 @@ Set these in **Settings > Secrets and variables > Actions > Secrets**:
 |---|---|
 | `OMNIVORE_API_KEY` | API key from the Omnivore dashboard Settings page |
 
-> **Note:** API key authentication is optional — if no keys have been created on the dashboard, the ingest endpoint is open. Once you create your first key, all uploads require a valid `X-API-Key` header.
+> **Note:** API key authentication is optional by default — while no keys exist
+> on the dashboard the ingest endpoint is open, and it starts requiring
+> `X-API-Key` as soon as you create your first key. Two consequences worth
+> knowing:
+>
+> - A dashboard reachable from an untrusted network accepts uploads from anyone
+>   until you create that first key. Set `OMNIVORE_REQUIRE_API_KEY=true` on the
+>   server to require one unconditionally.
+> - Deleting your last API key silently *reopens* the instance. The same
+>   variable prevents that.
+
+> **Pin your dashboard host.** Workflows below pass `secrets.GITHUB_TOKEN` to
+> the dashboard so it can post PR comments as you. If the URL comes from a
+> repository *variable*, anyone who can edit variables — a weaker permission
+> than editing secrets — can redirect that token elsewhere. Use `https://`, and
+> prefer hardcoding the host or checking it before the upload step. The
+> repository's own `coverage.yml` shows the check.
 
 ### Permissions
 

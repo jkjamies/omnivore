@@ -51,6 +51,22 @@ runs:
         INPUT_API_KEY: ${{ inputs.api_key }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
+        # Credentials are about to be sent to $INPUT_SERVER. Refuse to hand an
+        # API key or a GitHub token to a plaintext endpoint — the server URL
+        # usually comes from a repository variable, which is a weaker thing to
+        # edit than a secret.
+        case "$INPUT_SERVER" in
+          https://*) ;;
+          http://localhost*|http://127.0.0.1*) ;;
+          *)
+            if [ -n "$INPUT_API_KEY" ] || [ -n "$INPUT_GITHUB_TOKEN" ]; then
+              echo "::error::Refusing to send credentials to a non-HTTPS server: $INPUT_SERVER"
+              exit 1
+            fi
+            echo "::warning::Uploading over plaintext HTTP to $INPUT_SERVER"
+            ;;
+        esac
+
         # Build base query parameters
         BASE_PARAMS="project_id=$(printf '%s' "$INPUT_PROJECT_ID" | jq -sRr @uri)"
 

@@ -1,3 +1,4 @@
+pub mod maintenance;
 pub mod routes;
 
 pub use routes::auth::OAuthConfig;
@@ -128,10 +129,12 @@ pub fn build_router(db: Database) -> Router {
             routes::auth::require_project_write_middleware,
         ));
 
-    // -- All other routes (open — no auth required) --
-    let mut app = Router::new()
-        .merge(admin_routes)
-        .merge(project_settings_routes)
+    // -- Read routes --
+    //
+    // Open by default. `OMNIVORE_REQUIRE_LOGIN_TO_VIEW=true` puts them behind
+    // a session, for instances where the file paths and hotspot lists are
+    // themselves sensitive.
+    let view_routes = Router::new()
         // Pages (open for viewing)
         .route("/", routing::get(routes::pages::projects_page))
         .route(
@@ -156,29 +159,9 @@ pub fn build_router(db: Database) -> Router {
             "/api/v1/source/{project_id}/files/{*file_path}",
             routing::get(routes::pages::file_source_fragment),
         )
-        // Auth: logout and me (always accessible)
-        .route("/auth/logout", routing::post(routes::auth::logout))
-        .route("/auth/me", routing::get(routes::auth::me))
-        // API: Health
-        .route("/api/v1/health", routing::get(routes::health::health))
-        // API: Projects
         .route(
             "/api/v1/projects",
             routing::get(routes::projects::list_projects),
-        )
-        .route(
-            "/api/v1/projects",
-            routing::post(routes::projects::create_project),
-        )
-        .route(
-            "/api/v1/projects/{project_id}",
-            routing::patch(routes::projects::update_project),
-        )
-        // API: Coverage ingestion
-        .route(
-            "/api/v1/ingest/coverage",
-            routing::post(routes::coverage::ingest_coverage)
-                .layer(axum::extract::DefaultBodyLimit::max(max_upload_bytes())),
         )
         // API: Coverage queries
         .route(
@@ -206,6 +189,37 @@ pub fn build_router(db: Database) -> Router {
         .route(
             "/badge/{project_id}",
             routing::get(routes::badge::badge),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            db.clone(),
+            routes::auth::require_login_to_view_middleware,
+        ));
+
+    // -- Always-reachable routes --
+    //
+    // Health checks must answer for a load balancer regardless of auth, the
+    // auth endpoints are how a user gets a session in the first place, and the
+    // write API authenticates with an API key rather than a session — putting
+    // any of them behind the read gate would deadlock the instance.
+    let mut app = Router::new()
+        .merge(admin_routes)
+        .merge(project_settings_routes)
+        .merge(view_routes)
+        .route("/auth/logout", routing::post(routes::auth::logout))
+        .route("/auth/me", routing::get(routes::auth::me))
+        .route("/api/v1/health", routing::get(routes::health::health))
+        .route(
+            "/api/v1/projects",
+            routing::post(routes::projects::create_project),
+        )
+        .route(
+            "/api/v1/projects/{project_id}",
+            routing::patch(routes::projects::update_project),
+        )
+        .route(
+            "/api/v1/ingest/coverage",
+            routing::post(routes::coverage::ingest_coverage)
+                .layer(axum::extract::DefaultBodyLimit::max(max_upload_bytes())),
         )
         // Static files
         .nest_service("/static", ServeDir::new(static_dir))
@@ -261,4 +275,48 @@ pub fn build_router(db: Database) -> Router {
     }
 
     app
+}
+
+/// Log the instance's effective security posture at startup.
+///
+/// The dashboard has two independent access controls — OAuth for reading, API
+/// keys for writing — and both default to open. Neither is visible from the UI,
+/// so an operator can easily believe an instance is protected when it is not.
+/// Stating it plainly on every boot is the cheapest way to prevent that.
+pub async fn log_security_posture(db: &Database) {
+    let oauth = routes::auth::oauth_enabled();
+    let key_count = db.any_api_keys_exist().await.unwrap_or(false);
+    let require_key = routes::api_auth::api_key_required();
+
+    if oauth {
+        if routes::auth::require_login_to_view() {
+            tracing::info!("Read access: login required (OAuth enabled)");
+        } else {
+            tracing::info!(
+                "Read access: OPEN — anyone who can reach this port can browse all coverage. \
+                 Set OMNIVORE_REQUIRE_LOGIN_TO_VIEW=true to require a login."
+            );
+        }
+    } else {
+        tracing::warn!(
+            "Read access: OPEN — GitHub OAuth is not configured, so nobody can log in and \
+             everything is world-readable. Set GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET to enable."
+        );
+    }
+
+    match (require_key, key_count) {
+        (true, _) => tracing::info!("Write access: API key required (OMNIVORE_REQUIRE_API_KEY=true)"),
+        (false, true) => tracing::info!("Write access: API key required (keys exist)"),
+        (false, false) => tracing::warn!(
+            "Write access: OPEN — no API keys exist, so anyone can upload coverage and create \
+             projects. Create a key under /settings, or set OMNIVORE_REQUIRE_API_KEY=true."
+        ),
+    }
+
+    if oauth && !omnivore_core::crypto::is_enabled() {
+        tracing::warn!(
+            "Session GitHub tokens are stored unencrypted. Set OMNIVORE_SECRET_KEY to encrypt \
+             them at rest."
+        );
+    }
 }

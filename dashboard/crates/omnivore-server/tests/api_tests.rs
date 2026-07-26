@@ -1246,3 +1246,68 @@ async fn trend_returns_a_single_series() {
         "trend mixed series"
     );
 }
+
+/// Auto-create is convenient by default but must be closable.
+#[tokio::test]
+async fn project_autocreate_can_be_disabled() {
+    let db = test_db().await;
+
+    // SAFETY: this test does not run concurrently with others touching this var.
+    unsafe { std::env::set_var("OMNIVORE_ALLOW_PROJECT_AUTOCREATE", "false") };
+    let status = ingest(&db, report_with("unknown-project", "X", "a/B.kt")).await;
+    unsafe { std::env::remove_var("OMNIVORE_ALLOW_PROJECT_AUTOCREATE") };
+
+    assert_eq!(status, 500, "ingest to an unknown project should be refused");
+
+    let req = Request::get("/api/v1/projects").body(Body::empty()).unwrap();
+    let (_, body) = send(db, req).await;
+    assert_eq!(
+        json_body(&body).as_array().unwrap().len(),
+        0,
+        "no project should have been created"
+    );
+}
+
+/// malformed omnivore report.
+#[tokio::test]
+async fn unknown_json_is_reported_as_unknown_format() {
+    let db = test_db().await;
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"some":"unrelated","json":true}"#))
+        .unwrap();
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 400);
+    let message = String::from_utf8_lossy(&body);
+    assert!(
+        message.contains("detect format"),
+        "expected a format-detection error, got: {message}"
+    );
+}
+
+/// A project ID with quotes must not corrupt the download header.
+#[tokio::test]
+async fn export_filename_is_sanitized() {
+    let db = test_db().await;
+    assert_eq!(
+        ingest(&db, report_with("weird\"id", "Weird", "a/B.kt")).await,
+        201
+    );
+
+    let req = Request::get("/projects/weird%22id/export/report?format=json")
+        .body(Body::empty())
+        .unwrap();
+    let app = build_router(db);
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        !disposition.contains("weird\"id"),
+        "unsanitized project id reached the header: {disposition}"
+    );
+}
