@@ -70,6 +70,16 @@ through that one traversal for exactly this reason — and both the JVM agent an
 the AGP transform share it (`ClassInstrumenter` / `InstrumentingClassVisitor`),
 rather than keeping the parallel implementations that had already drifted apart.
 
+**Two entry points, one core.** `OmnivoreClassTransformer` (load time, JVM agent)
+and `BuildTimeInstrumentingVisitor` (build time, AGP) both live in
+`omnivore-agent` and both funnel into `ClassInstrumenter`. The build-time one
+buffers the class into an ASM `ClassNode` because AGP hands the transform a
+streaming visitor and probe-array sizing needs a total that is not known until
+every method has been seen. `BuildTimeInstrumentationTest` asserts the two paths
+emit **identical probe maps** for the same input; if that test ever fails,
+Android and JVM coverage disagree about what a probe index means, which is the
+failure mode that produces plausible wrong numbers rather than an error.
+
 **Diagnostics:** `InstrumentationStats` counts why classes were or weren't
 instrumented; the agent writes a `.stats` file next to the `.omnivore` data and
 `omnivoreReport` prints a summary line. A class can drop out of coverage for
@@ -117,7 +127,7 @@ omnivore {
 
 **OmnivoreTestListener** (`com.jkjamies.omnivore.agent.android`): JUnit 4 `RunListener` that initializes the agent on `testRunStarted` and flushes `.omnivore`/`.probes` files on `testRunFinished`. Outputs coverage data as base64 via System.err (logcat) with marker lines — this bypasses Android SELinux restrictions on `/data/local/tmp/` and survives AGP's post-test app uninstallation.
 
-**OmnivoreClassVisitorFactory** (`com.jkjamies.omnivore.gradle.transform`): AGP `AsmClassVisitorFactory` that applies probe instrumentation at build time (Android has no `-javaagent` support).
+**OmnivoreClassVisitorFactory** (`com.jkjamies.omnivore.gradle.transform`): AGP `AsmClassVisitorFactory` that applies probe instrumentation at build time (Android has no `-javaagent` support). It is deliberately thin — filtering plus a delegation to `BuildTimeInstrumentingVisitor` in the **agent** module. The instrumentation logic lives there because this module is `compileOnly` against AGP, so anything defined here can only be tested with a full Android toolchain; that is precisely how the build-time path drifted from the agent's in the first place. See `BuildTimeInstrumentationTest`, which holds the two paths to the same probe map for the same input class, and the `android.yml` workflow, which runs the transform under real AGP.
 
 **OmnivoreReportTask:** Scans `build/omnivore/` for `.omnivore` + `.probes` files (from both unit and instrumented tests), analyzes each target (`JVM_UNIT`, `ANDROID_INSTRUMENTED`) independently, and writes one `omnivore-report.json` per target to `build/reports/omnivore/` — top-level for a single target, or under a target-named subdirectory (`jvm-unit/`, `android-instrumented/`) when multiple targets are present, so each uploads as its own dashboard series. Local `index.html`/`coverage.md` use a merged combined view.
 
