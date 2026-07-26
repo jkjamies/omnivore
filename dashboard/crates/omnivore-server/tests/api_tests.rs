@@ -719,6 +719,314 @@ async fn retention_prunes_old_snapshots() {
     }
 }
 
+// ── Security regressions ────────────────────────────────────────────────
+//
+// Each test below pins a specific defect found in review. They are grouped
+// together so it is obvious what breaks if the corresponding guard is removed.
+
+/// Build an omnivore report with caller-chosen identity fields, so a test can
+/// push hostile strings through the ingest path the way an untrusted uploader
+/// would.
+fn report_with(project_id: &str, project_name: &str, file_path: &str) -> String {
+    serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": project_id,
+            "name": project_name,
+            "commitSha": "abc123",
+            "branch": "main",
+            "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.5, "branchRate": 0.5,
+            "linesCovered": 1, "linesTotal": 2,
+            "branchesCovered": 1, "branchesTotal": 2
+        },
+        "files": [{
+            "path": file_path,
+            "lineRate": 0.5,
+            "branchRate": 0.5,
+            "lines": [
+                {"lineNumber": 1, "hitCount": 1},
+                {"lineNumber": 2, "hitCount": 0}
+            ]
+        }]
+    })
+    .to_string()
+}
+
+async fn ingest(db: &Database, body: String) -> hyper::StatusCode {
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    send(db.clone(), req).await.0
+}
+
+async fn get_text(db: &Database, uri: &str) -> (hyper::StatusCode, String) {
+    let req = Request::get(uri).body(Body::empty()).unwrap();
+    let (status, body) = send(db.clone(), req).await;
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// The embed endpoint renders the project name into an SVG served as
+/// `image/svg+xml`. Opened directly that is a document, so unescaped markup
+/// would execute on the dashboard's own origin.
+#[tokio::test]
+async fn embed_svg_escapes_project_name() {
+    let db = test_db().await;
+    let hostile = r#"</text><script>alert(1)</script>"#;
+    assert_eq!(ingest(&db, report_with("xss-embed", hostile, "a/B.kt")).await, 201);
+
+    let (status, svg) = get_text(&db, "/embed/xss-embed/trend").await;
+    assert_eq!(status, 200);
+    assert!(
+        !svg.contains("<script>"),
+        "project name was not escaped into the SVG: {svg}"
+    );
+    assert!(svg.contains("&lt;script&gt;"), "expected escaped markup: {svg}");
+}
+
+/// Dimensions come straight off the query string and feed the SVG geometry.
+#[tokio::test]
+async fn embed_svg_clamps_dimensions() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("dims", "Dims", "a/B.kt")).await, 201);
+
+    let (status, svg) = get_text(&db, "/embed/dims/trend?width=99999999&height=-5").await;
+    assert_eq!(status, 200);
+    assert!(svg.contains(r#"width="4000""#), "width not clamped: {svg}");
+    assert!(svg.contains(r#"height="60""#), "height not clamped: {svg}");
+}
+
+/// Module names reach an inline `<script>` as JSON. `serde_json` does not
+/// escape `<`, so `</script>` in a module name used to close the element.
+#[tokio::test]
+async fn dependency_graph_json_cannot_close_script_tag() {
+    let db = test_db().await;
+    let body = serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": "dep-xss", "name": "Dep XSS",
+            "commitSha": "abc", "branch": "main", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.5, "branchRate": 0.5,
+            "linesCovered": 1, "linesTotal": 2,
+            "branchesCovered": 1, "branchesTotal": 2
+        },
+        "files": [{
+            "path": "a/B.kt", "lineRate": 0.5, "branchRate": 0.5,
+            "lines": [{"lineNumber": 1, "hitCount": 1}]
+        }],
+        "dependencies": {
+            "modules": [{
+                "id": ":evil",
+                "name": "</script><script>alert(1)</script>",
+                "type": "INTERNAL"
+            }],
+            "edges": []
+        }
+    })
+    .to_string();
+    assert_eq!(ingest(&db, body).await, 201);
+
+    let (status, html) = get_text(&db, "/projects/dep-xss/dependencies").await;
+    assert_eq!(status, 200);
+    assert!(
+        !html.contains("</script><script>alert(1)"),
+        "module name broke out of the script block"
+    );
+    assert!(html.contains(r"</script"), "expected escaped '<' in embedded JSON");
+}
+
+/// File paths are interpolated into `onclick="toggleDir(this, '…')"`, so a
+/// path containing a single quote could previously close the JS string.
+#[tokio::test]
+async fn file_tree_escapes_single_quotes_in_paths() {
+    let db = test_db().await;
+    let hostile_dir = r#"ev'il"#;
+    assert_eq!(
+        ingest(&db, report_with("quote-xss", "Quote", &format!("{hostile_dir}/pkg/B.kt"))).await,
+        201
+    );
+
+    let (status, html) = get_text(&db, "/projects/quote-xss").await;
+    assert_eq!(status, 200);
+    assert!(
+        !html.contains("toggleDir(this, 'ev'il"),
+        "single quote in a file path was not escaped"
+    );
+    assert!(html.contains("&#39;"), "expected an escaped single quote");
+}
+
+/// `github_repo` decides which repository the server fetches source from and
+/// comments on, so it must not accept a value that alters a URL path.
+#[tokio::test]
+async fn update_project_rejects_malformed_repo_slug() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("slug-proj", "Slug", "a/B.kt")).await, 201);
+
+    let req = Request::patch("/api/v1/projects/slug-proj")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"github_repo": "owner/repo/../../user"}).to_string(),
+        ))
+        .unwrap();
+    let (status, _) = send(db.clone(), req).await;
+    assert_eq!(status, 400);
+
+    // A well-formed slug still works.
+    let req = Request::patch("/api/v1/projects/slug-proj")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"github_repo": "jkjamies/omnivore"}).to_string(),
+        ))
+        .unwrap();
+    let (status, _) = send(db, req).await;
+    assert_eq!(status, 200);
+}
+
+/// Once any API key exists, every write endpoint must demand one — the
+/// projects API used to be reachable with no credential at all.
+#[tokio::test]
+async fn write_endpoints_require_api_key_once_one_exists() {
+    let db = test_db().await;
+    let created = db.create_api_key("ci", None).await.unwrap();
+
+    // No header → rejected.
+    let req = Request::post("/api/v1/projects")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"id": "guarded", "name": "Guarded"}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 401);
+
+    assert_eq!(ingest(&db, report_with("guarded-ingest", "G", "a/B.kt")).await, 401);
+
+    // Valid key → accepted.
+    let req = Request::post("/api/v1/projects")
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", created.key.clone())
+        .body(Body::from(
+            serde_json::json!({"id": "guarded", "name": "Guarded"}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 201);
+}
+
+/// A project-scoped key must not be usable against a different project.
+#[tokio::test]
+async fn project_scoped_key_cannot_write_other_projects() {
+    let db = test_db().await;
+    db.create_project(&omnivore_core::model::project::CreateProject {
+        id: "owned".into(),
+        name: "Owned".into(),
+        description: None,
+        github_repo: None,
+        source_root: None,
+        line_threshold: None,
+        branch_threshold: None,
+        line_warn_threshold: None,
+        branch_warn_threshold: None,
+    })
+    .await
+    .unwrap();
+    let scoped = db.create_api_key("scoped", Some("owned")).await.unwrap();
+
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", scoped.key.clone())
+        .body(Body::from(report_with("someone-else", "Other", "a/B.kt")))
+        .unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 403);
+
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", scoped.key)
+        .body(Body::from(report_with("owned", "Owned", "a/B.kt")))
+        .unwrap();
+    assert_eq!(send(db, req).await.0, 201);
+}
+
+/// Deleting a project must take its scoped API keys with it, or those keys
+/// outlive the thing they authorise.
+#[tokio::test]
+async fn deleting_a_project_revokes_its_scoped_keys() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("doomed", "Doomed", "a/B.kt")).await, 201);
+    let key = db.create_api_key("scoped", Some("doomed")).await.unwrap();
+
+    db.delete_project("doomed").await.unwrap();
+
+    assert!(
+        db.validate_api_key(&key.key).await.unwrap().is_none(),
+        "scoped API key survived deletion of its project"
+    );
+}
+
+/// The ratchet floor is a promise about the main line. A feature-branch build
+/// must not be able to raise it permanently.
+#[tokio::test]
+async fn ratchet_floor_only_advances_on_main_line_branches() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("ratchet", "Ratchet", "a/B.kt")).await, 201);
+    db.update_project_ratchet("ratchet", true, Some(0.40), Some(0.40))
+        .await
+        .unwrap();
+
+    let high_on_feature = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {
+            "id": "ratchet", "name": "Ratchet",
+            "commitSha": "feat", "branch": "feature/spike", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.99, "branchRate": 0.99,
+            "linesCovered": 99, "linesTotal": 100,
+            "branchesCovered": 99, "branchesTotal": 100
+        },
+        "files": []
+    })
+    .to_string();
+    assert_eq!(ingest(&db, high_on_feature).await, 201);
+
+    let project = db.get_project("ratchet").await.unwrap().unwrap();
+    assert_eq!(
+        project.ratchet_line_floor,
+        Some(0.40),
+        "a feature branch raised the ratchet floor"
+    );
+
+    // The same numbers on main do advance it.
+    let high_on_main = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {
+            "id": "ratchet", "name": "Ratchet",
+            "commitSha": "main1", "branch": "main", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.99, "branchRate": 0.99,
+            "linesCovered": 99, "linesTotal": 100,
+            "branchesCovered": 99, "branchesTotal": 100
+        },
+        "files": []
+    })
+    .to_string();
+    assert_eq!(ingest(&db, high_on_main).await, 201);
+
+    let project = db.get_project("ratchet").await.unwrap().unwrap();
+    assert!(
+        project.ratchet_line_floor.unwrap() > 0.98,
+        "main-line build failed to advance the floor"
+    );
+}
+
+// ── Upgrade path ────────────────────────────────────────────────────────
+
 /// Starting against a database created by an older Omnivore must work.
 ///
 /// Regression test for a startup-blocking bug: `run_migrations` applied

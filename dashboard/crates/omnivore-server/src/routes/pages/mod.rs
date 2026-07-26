@@ -158,11 +158,58 @@ pub fn fmt_delta_html(delta: Option<f64>) -> String {
     }
 }
 
+/// Escape a string for interpolation into HTML text or a quoted attribute.
+///
+/// The single quote matters as much as the double: file paths from uploaded
+/// coverage reports are interpolated into `onclick="toggleDir(this, '…')"`, so
+/// leaving `'` unescaped let a crafted path close the JS string literal and run
+/// script. Escape it as `&#39;` (rather than `&apos;`, which is not defined in
+/// HTML 4).
 pub fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Serialize a value as JSON that is safe to embed inside an inline
+/// `<script>` block.
+///
+/// `serde_json` escapes quotes and backslashes but leaves `<`, `>` and `&`
+/// alone, so a coverage report containing a module named `</script><script>…`
+/// would break out of the script element. HTML tokenizes `</script` before the
+/// JS parser ever sees the string, so this has to be fixed at serialization
+/// time. `<` and friends are valid JSON escapes that decode back to the
+/// original characters, so the embedded value is unchanged.
+///
+/// U+2028/U+2029 are escaped too: they terminate a line in JavaScript but not
+/// in JSON.
+pub fn json_for_script<T: serde::Serialize>(value: &T, fallback: &str) -> String {
+    let raw = match serde_json::to_string(value) {
+        Ok(raw) => raw,
+        Err(_) => return fallback.to_string(),
+    };
+
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn target_label(target: &str) -> String {

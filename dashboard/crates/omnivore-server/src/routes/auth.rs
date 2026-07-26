@@ -1,4 +1,4 @@
-use axum::extract::{Query, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Redirect, Response};
@@ -8,6 +8,56 @@ use omnivore_core::storage::Database;
 use serde::{Deserialize, Serialize};
 
 const SESSION_COOKIE: &str = "omnivore_session";
+const OAUTH_STATE_COOKIE: &str = "omnivore_oauth_state";
+
+/// Scopes requested at login.
+///
+/// The default is deliberately read-only and does **not** include `repo`.
+/// `repo` grants full read *and write* access to every private repository the
+/// user can reach, and the resulting token is stored server-side for the life
+/// of the session — far more authority than a coverage dashboard needs to show
+/// a trend line. Operators who want the on-demand source view to work for
+/// private repositories opt in explicitly:
+///
+/// ```text
+/// OMNIVORE_GITHUB_SCOPES=read:user,read:org,repo
+/// ```
+const DEFAULT_OAUTH_SCOPES: &str = "read:user,read:org";
+
+fn oauth_scopes() -> String {
+    std::env::var("OMNIVORE_GITHUB_SCOPES")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_OAUTH_SCOPES.to_string())
+}
+
+/// Whether to mark auth cookies `Secure`.
+///
+/// Defaults to on when the dashboard is advertised over HTTPS, off otherwise —
+/// a `Secure` cookie is simply never sent over plain HTTP, which would break
+/// login for someone running this on `http://localhost:3000`. Override with
+/// `OMNIVORE_COOKIE_SECURE=true|false`.
+fn cookie_secure() -> bool {
+    match std::env::var("OMNIVORE_COOKIE_SECURE") {
+        Ok(v) if !v.trim().is_empty() => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => std::env::var("OMNIVORE_DASHBOARD_URL")
+            .map(|url| url.trim_start().starts_with("https://"))
+            .unwrap_or(false),
+    }
+}
+
+/// Constant-time string comparison for the OAuth state token.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
 
 /// OAuth configuration, loaded from environment.
 #[derive(Clone)]
@@ -32,18 +82,44 @@ impl OAuthConfig {
 }
 
 /// Redirect to GitHub OAuth authorization page.
-pub async fn login(State(config): State<OAuthConfig>) -> Redirect {
-    let scopes = "read:user,read:org,repo";
-    let url = format!(
-        "https://github.com/login/oauth/authorize?client_id={}&scope={}",
-        config.client_id, scopes
+///
+/// Mints a single-use `state` token, stashes it in a short-lived cookie, and
+/// echoes it to GitHub. `callback` refuses any response whose `state` doesn't
+/// match, which is what stops an attacker from feeding the victim's browser an
+/// authorization code of the attacker's own — a login-CSRF that would leave the
+/// victim silently operating the dashboard as the attacker's GitHub identity.
+pub async fn login(State(config): State<OAuthConfig>, jar: CookieJar) -> (CookieJar, Redirect) {
+    let state = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
     );
-    Redirect::temporary(&url)
+
+    // A session cookie: it lives only until the callback consumes it, and the
+    // callback removes it either way.
+    let state_cookie = Cookie::build((OAUTH_STATE_COOKIE, state.clone()))
+        .path("/")
+        .http_only(true)
+        .secure(cookie_secure())
+        .same_site(axum_extra::extract::cookie::SameSite::Lax)
+        .build();
+
+    // client_id and the scope list are operator-configured; state is hex.
+    let url = format!(
+        "https://github.com/login/oauth/authorize?client_id={}&scope={}&state={}",
+        config.client_id,
+        oauth_scopes(),
+        state,
+    );
+
+    (jar.add(state_cookie), Redirect::temporary(&url))
 }
 
 #[derive(Deserialize)]
 pub struct CallbackParams {
     code: String,
+    #[serde(default)]
+    state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +139,25 @@ pub async fn callback(
     jar: CookieJar,
     Query(params): Query<CallbackParams>,
 ) -> Result<(CookieJar, Redirect), (StatusCode, String)> {
+    // Verify the CSRF state before spending the code. Both halves must be
+    // present and equal; a missing cookie is as much a failure as a mismatch.
+    let expected_state = jar
+        .get(OAUTH_STATE_COOKIE)
+        .map(|c| c.value().to_string())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "Missing OAuth state cookie — restart login from /auth/login".to_string(),
+        ))?;
+    let provided_state = params.state.as_deref().unwrap_or_default();
+    if !constant_time_eq(&expected_state, provided_state) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "OAuth state mismatch — possible login CSRF; restart login".to_string(),
+        ));
+    }
+    // Single use, whatever happens next.
+    let jar = jar.remove(Cookie::build((OAUTH_STATE_COOKIE, "")).path("/").build());
+
     // Exchange code for access token
     let client = reqwest::Client::new();
     let token_resp = client
@@ -113,6 +208,7 @@ pub async fn callback(
     let cookie = Cookie::build((SESSION_COOKIE, session.id))
         .path("/")
         .http_only(true)
+        .secure(cookie_secure())
         .same_site(axum_extra::extract::cookie::SameSite::Lax)
         .build();
 
@@ -131,6 +227,7 @@ pub async fn logout(
     let removal = Cookie::build((SESSION_COOKIE, ""))
         .path("/")
         .http_only(true)
+        .secure(cookie_secure())
         .build();
 
     (jar.remove(removal), Redirect::to("/"))
@@ -144,6 +241,12 @@ pub struct AuthStatusResponse {
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+}
+
+/// Is OAuth configured? When it is not, the dashboard runs fully open by
+/// design and every guard below short-circuits.
+pub fn oauth_enabled() -> bool {
+    OAuthConfig::from_env().is_some()
 }
 
 /// Get auth status: whether OAuth is configured and current user info.
@@ -224,30 +327,41 @@ async fn fetch_repo_permission(token: &str, username: &str, repo: &str) -> Optio
     Some(data.permission)
 }
 
-/// Check if user is a dashboard admin.
-/// - If OMNIVORE_GITHUB_ORG is set: org owners = admin
-/// - Otherwise: admin on any linked repo = admin
+/// Check if the user is a *dashboard* admin — able to change global settings
+/// and mint global API keys.
+///
+/// Resolution order:
+/// 1. `OMNIVORE_ADMIN_USERS` — an explicit comma-separated allowlist of GitHub
+///    usernames. Unambiguous, and the recommended setting for a self-hosted
+///    instance.
+/// 2. `OMNIVORE_GITHUB_ORG` — owners of that org are admins.
+/// 3. Otherwise: nobody. There is deliberately no "admin on any linked repo"
+///    fallback. Projects are auto-created by ingest, and anyone who can reach
+///    an open ingest endpoint can create one pointing at a repo they own — so
+///    that rule let an outsider promote themselves to dashboard admin by
+///    uploading a report and linking their own repository.
 pub async fn is_dashboard_admin(db: &Database, user: &AuthUser) -> bool {
-    // Strategy 1: org-based
+    let _ = db;
+
+    if let Ok(list) = std::env::var("OMNIVORE_ADMIN_USERS") {
+        if !list.trim().is_empty() {
+            return list
+                .split(',')
+                .map(str::trim)
+                .any(|name| !name.is_empty() && name.eq_ignore_ascii_case(&user.username));
+        }
+    }
+
     if let Ok(org) = std::env::var("OMNIVORE_GITHUB_ORG") {
-        if !org.is_empty() {
-            return check_org_owner(&user.github_token, &user.username, &org).await;
+        if !org.trim().is_empty() {
+            return check_org_owner(&user.github_token, &user.username, org.trim()).await;
         }
     }
 
-    // Strategy 2: admin on any linked project repo
-    let projects = db.list_projects().await.unwrap_or_default();
-    for project in &projects {
-        if let Some(ref repo) = project.github_repo {
-            if !repo.is_empty() {
-                let perm = check_repo_permission(db, user, repo).await;
-                if perm == "admin" || perm == "maintain" {
-                    return true;
-                }
-            }
-        }
-    }
-
+    tracing::warn!(
+        username = %user.username,
+        "Admin access denied: set OMNIVORE_ADMIN_USERS or OMNIVORE_GITHUB_ORG to grant it"
+    );
     false
 }
 
@@ -269,6 +383,40 @@ pub async fn require_login_middleware(
         return next.run(request).await;
     }
     Redirect::to("/auth/login").into_response()
+}
+
+/// Middleware: require write access to the project named in the path.
+///
+/// Applied to every mutating project route. `require_login_middleware` alone
+/// was not enough there: it let *any* logged-in GitHub user delete another
+/// team's project, retarget its repository, or mint an API key scoped to it.
+/// Write access means dashboard admin, or admin/maintain/write on the repo the
+/// project is linked to.
+///
+/// A project with no linked repository has nothing to check permissions
+/// against, so it is admin-only.
+pub async fn require_project_write_middleware(
+    State(db): State<Database>,
+    Path(params): Path<std::collections::HashMap<String, String>>,
+    jar: CookieJar,
+    request: Request,
+    next: Next,
+) -> Response {
+    if OAuthConfig::from_env().is_none() {
+        return next.run(request).await;
+    }
+
+    let Some(project_id) = params.get("project_id") else {
+        // Fail closed: this middleware is only mounted on routes that have a
+        // {project_id}, so a missing one means a routing mistake.
+        tracing::error!("require_project_write_middleware mounted on a route without {{project_id}}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+
+    match require_project_write(&db, &jar, project_id).await {
+        Ok(_) => next.run(request).await,
+        Err(err) => err.into_response(),
+    }
 }
 
 /// Middleware: require dashboard admin when OAuth is enabled.

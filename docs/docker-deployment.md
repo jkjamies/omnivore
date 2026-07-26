@@ -32,7 +32,34 @@ All configuration is via environment variables:
 | `GITHUB_CLIENT_ID` | *(none)* | GitHub OAuth App client ID (enables login) |
 | `GITHUB_CLIENT_SECRET` | *(none)* | GitHub OAuth App client secret |
 | `OMNIVORE_STATIC_DIR` | *(compile-time)* | Path to static assets directory (set automatically in Docker) |
+| `OMNIVORE_ADMIN_USERS` | *(none)* | Comma-separated GitHub usernames granted dashboard admin |
 | `OMNIVORE_GITHUB_ORG` | *(none)* | GitHub org for admin resolution (org owners = dashboard admins) |
+| `OMNIVORE_GITHUB_SCOPES` | `read:user,read:org` | OAuth scopes. Add `repo` only for private-repo source viewing |
+| `OMNIVORE_COOKIE_SECURE` | *(auto)* | Force `Secure` on auth cookies; defaults to on when `OMNIVORE_DASHBOARD_URL` is `https://` |
+| `OMNIVORE_REQUIRE_API_KEY` | `false` | Require `X-API-Key` on all writes, even before any key exists |
+| `OMNIVORE_CORS_ORIGINS` | *(same-origin)* | Comma-separated allowed origins, or `*` |
+| `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum ingest body size (32 MiB) |
+| `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a ratchet floor |
+
+### Before exposing this beyond localhost
+
+The dashboard defaults to open on **both** axes — anyone who can reach the port
+can browse everything, and anyone can upload until the first API key exists. At
+minimum:
+
+```sh
+-e OMNIVORE_REQUIRE_API_KEY=true \
+-e GITHUB_CLIENT_ID=... -e GITHUB_CLIENT_SECRET=... \
+-e OMNIVORE_ADMIN_USERS=yourname \
+-e OMNIVORE_DASHBOARD_URL=https://omnivore.example.com
+```
+
+Note that coverage numbers and file paths stay world-readable even with OAuth
+on — only mutations are gated. Put an authenticating reverse proxy in front if
+that is not acceptable. See `dashboard/README.md#security-model`.
+
+The container runs as an unprivileged user (uid 10001) and writes only to
+`/data`, so bind-mounted host directories must be writable by that uid.
 
 Pass env vars with `-e`:
 
