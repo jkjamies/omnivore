@@ -120,10 +120,16 @@ Generate context-aware prompts users can copy into their AI tool (Claude, ChatGP
 - **File coverage view**: button that builds a prompt from specific uncovered lines asking for test suggestions
 - **Delta drops**: when coverage decreased, prompt asking what tests would restore coverage in affected files
 
-### Inline AI Suggestions (Medium — Enterprise)
+### Inline AI Suggestions (Medium — Enterprise) — NOT PLANNED
+
+> Superseded by the MCP server; see [PRODUCT-STRATEGY.md §4](PRODUCT-STRATEGY.md).
+
 User-configurable API key (Claude, OpenAI, etc.). Dashboard calls the API and renders suggestions inline. Collapsible "AI Suggestions" panel on hotspots and file coverage views. Same surfaces as copy-to-clipboard but automatic.
 
-### PR-Level AI Test Review (Medium-Large — Enterprise)
+### PR-Level AI Test Review (Medium-Large — Enterprise) — NOT PLANNED
+
+> Superseded by the MCP server; see [PRODUCT-STRATEGY.md §4](PRODUCT-STRATEGY.md).
+
 On ingest with PR context, generate AI-powered test suggestions as part of the GitHub PR comment. Identifies uncovered new/changed lines and suggests specific tests to write. Depends on Diff Coverage being implemented first.
 
 ## Plugin/Agent

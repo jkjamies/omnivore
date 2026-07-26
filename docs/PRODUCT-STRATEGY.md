@@ -190,32 +190,14 @@ instrumentation.
 
 **"Generate tests for uncovered code."** Claude Code, Cursor, and Copilot all do
 this today, and none of them needs Omnivore to do it. Building it buys a demo,
-not a moat. If built at all, build it last.
+not a moat.
 
-### What is actually worth building
+The useful move is the inverse: **make coverage available to the agents people
+already use**, rather than adding another agent to the pile.
 
-The inverse: **make coverage available to the agents people already use.**
+### Decision (tentative): MCP server, not in-product LLM features
 
-1. **An MCP server over the dashboard.** Tools like `uncovered_lines(module)`,
-   `coverage_delta(pr)`, `hotspots(path)`, `series(project)`. Coding agents
-   today have zero coverage awareness — they cannot see what is untested.
-   Giving them a live feed is a small amount of code and a genuine capability,
-   and nobody has done it well yet. **Highest ratio of differentiation to
-   effort on this list.**
-
-2. **`omnivore context` CLI.** Emits uncovered lines plus surrounding source as
-   a prompt-ready block, so any agent or human can consume it without
-   integrating anything. Works with tools that have no MCP support.
-
-3. **Close the ratchet loop.** The auto-advancing floor already exists. "Agent
-   writes tests until the floor rises, CI verifies, ratchet locks the gain in"
-   is a complete product story built entirely from primitives already shipped.
-
-4. **Natural-language coverage queries** — "which modules regressed this
-   sprint?" Genuinely useful, but only after the data model supports org-level
-   rollups. Not before.
-
-### The principle
+**Omnivore exposes coverage to agents; it does not call models itself.**
 
 > Own the data. Let people bring their own model.
 
@@ -223,9 +205,104 @@ The moat is Compose-aware, multi-target, ideally per-test coverage data — not
 the model that reads it. Anything that makes Omnivore a *source of truth an
 agent queries* compounds. Anything that makes it *another chat box* does not.
 
-Practical consequence: LLM features should be additive and optional. No
-required API key, no feature that breaks when a provider changes, no core
-workflow that depends on a model call.
+This supersedes the in-product AI features currently on the books:
+
+| Currently planned | Disposition |
+|---|---|
+| AI-powered test suggestions (copy-to-clipboard prompts) | Superseded by MCP |
+| Inline AI suggestions (dashboard calls an AI API, renders inline) | **Not planned** |
+| PR-level AI test review (AI suggestions in PR comments) | **Not planned** |
+
+Each of those requires Omnivore to hold a provider API key, own prompt
+quality, absorb per-call cost, and break whenever a model is deprecated —
+in exchange for a capability the user's existing tools already have. The MCP
+server delivers the same outcome with none of that, because the agent doing
+the reasoning is the one the developer already pays for.
+
+Second-order benefit: it inverts the integration burden. Every new agent that
+speaks MCP becomes an Omnivore client for free.
+
+### Design sketch
+
+**Shape.** A small standalone binary (`omnivore-mcp`) speaking MCP over stdio,
+talking to the dashboard's existing REST API. Stdio because it is universally
+supported by current clients and needs no hosting. A streamable-HTTP endpoint
+served by the dashboard itself is the natural phase 2, once remote/hosted
+agents matter — but it carries an auth design that stdio avoids.
+
+Keep it a **thin shim over the REST API**, not a second consumer of the
+database. The MCP spec is still moving; confining churn to a translation layer
+means spec changes never reach the core.
+
+**Tools — read-only to start.** Write access from an agent is a materially
+different risk conversation and is not needed for the value.
+
+| Tool | Backed by | Status |
+|---|---|---|
+| `list_projects()` | `GET /api/v1/projects` | exists |
+| `list_series(project)` | `GET /api/v1/coverage/{id}/series` | exists |
+| `coverage_summary(project, target?, source?)` | `GET /…/latest` | exists |
+| `hotspots(project, limit?)` | derived from `files_json` | exists (page-only; needs an API) |
+| `uncovered_lines(project, path)` | derived from `files_json` | **needs a new endpoint** |
+| `coverage_for_diff(project, base, head)` | diff coverage | **blocked on P0** |
+
+`uncovered_lines` is the one that matters. "Which lines in the file I am editing
+are untested?" is the question an agent actually needs answered, and answering
+it well — line ranges, not a percentage — is most of the value.
+
+**Prerequisite: a read-scoped token.** API keys today authorize *writes* only;
+reads are either open or gated by an OAuth **session cookie**, and an MCP client
+has no browser session. So an instance running
+`OMNIVORE_REQUIRE_LOGIN_TO_VIEW=true` currently has no way to grant a
+machine read access.
+
+That gap has to close before the MCP server is useful on a locked-down
+instance. Options, cheapest first:
+
+1. Give API keys a `read` scope and accept them on read endpoints — small, and
+   fits the existing model.
+2. A separate read-token type — cleaner separation, more surface.
+3. Device-flow OAuth for CLI clients — best UX, most work.
+
+Option 1 is the recommendation; it is a column and a guard, not a subsystem.
+
+**Phasing.**
+
+- **Phase 1** — `list_projects`, `list_series`, `coverage_summary`, `hotspots`,
+  `uncovered_lines`, plus the read-scope work. Ships value on day one for
+  anyone whose dashboard is already reachable.
+- **Phase 2** — `coverage_for_diff`, once P0 lands. This is the one that makes
+  an agent genuinely useful in a PR workflow.
+- **Phase 3** — HTTP transport for hosted agents; per-test tools if §2 resolves
+  in favour of keeping the agent.
+
+### Still worth building alongside
+
+1. **`omnivore context` CLI.** Emits uncovered lines plus surrounding source as
+   a prompt-ready block. Covers tools with no MCP support, and doubles as a
+   debugging aid for the MCP server itself. Small.
+
+2. **Close the ratchet loop.** The auto-advancing floor already exists. "Agent
+   writes tests until the floor rises, CI verifies, ratchet locks the gain in"
+   is a complete story built entirely from shipped primitives — and with the
+   MCP server it needs no new product surface at all, just documentation.
+
+### Explicitly deferred
+
+**Natural-language coverage queries** ("which modules regressed this sprint?").
+Genuinely useful, but it needs org-level rollups in the data model first, and
+with an MCP server the user's own agent can answer it by composing existing
+tools. Revisit only if that proves inadequate.
+
+### Risks
+
+- **Spec churn.** MCP is young. Mitigated by the thin-shim constraint above.
+- **Scope creep into write tools.** An agent that can mutate ratchet floors or
+  delete projects is a different risk class. Read-only is a deliberate line;
+  moving it should be a conscious decision, not an increment.
+- **It is only as good as the data.** An agent confidently reporting wrong
+  coverage is worse than no integration. This raises, not lowers, the priority
+  of the verification harness in §7.
 
 ---
 
@@ -332,7 +409,8 @@ multi-format, Compose-aware. The path to compelling is short and specific:
 
 1. Ship **diff coverage and PR gating** — turns a dashboard into a gate
 2. Lead the pitch with **Compose and KMP**, drop the SonarQube framing
-3. Add the **MCP server** — cheap, timely, genuinely differentiating
+3. Add the **MCP server** — cheap, timely, genuinely differentiating, and the
+   agreed alternative to building LLM features into the product
 4. Decide the **agent question** in §2 deliberately rather than by inertia
 5. Build the **verification harness** that makes the numbers defensible
 
@@ -357,7 +435,11 @@ review stack (`pr1`–`pr5`) once merged.
 | GitHub Check Runs | Planned (Small-Medium) | **P0**, ships with diff coverage |
 | API keys / admin roles | Pro | Recommend moving to **free** (§6) |
 | Risk-weighted coverage (churn × coverage) | Not listed | **P1** — new |
-| MCP server | Not listed | **P1** — new, highest differentiation per unit effort |
-| `omnivore context` CLI | Not listed | **P2** — new |
+| MCP server | Not listed | **P1, tentatively adopted** — the chosen direction for agent support (§4) |
+| Read-scoped API token | Not listed | **New prerequisite** — API keys authorize writes only, so MCP cannot read a login-gated instance |
+| `omnivore context` CLI | Not listed | **P2** — new, complements MCP for clients without it |
+| AI-powered test suggestions (copy-to-clipboard) | Pro, Planned | Superseded by MCP |
+| Inline AI suggestions | Enterprise, Planned | **Won't build** (§4) |
+| PR-level AI test review | Enterprise, Planned | **Won't build** (§4) |
 | Security / vulnerability scanning | Implied by Sonar framing | **Won't build** (§5) |
 | Hosted SaaS | Implied by tiering | Deferred until diff coverage lands |
