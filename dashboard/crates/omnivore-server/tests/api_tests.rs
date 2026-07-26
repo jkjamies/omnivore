@@ -1100,3 +1100,149 @@ async fn migrates_a_database_created_by_an_older_version() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ── Aggregation and series correctness ──────────────────────────────────
+
+/// Build a report with explicit per-file branch counts.
+fn report_with_branches(
+    project_id: &str,
+    target: &str,
+    files: &[(&str, i64, i64, &[(i32, i64)])],
+) -> String {
+    let file_json: Vec<Value> = files
+        .iter()
+        .map(|(path, br_cov, br_tot, lines)| {
+            let line_json: Vec<Value> = lines
+                .iter()
+                .map(|(n, h)| serde_json::json!({"lineNumber": n, "hitCount": h}))
+                .collect();
+            let covered = lines.iter().filter(|(_, h)| *h > 0).count() as f64;
+            serde_json::json!({
+                "path": path,
+                "lineRate": if lines.is_empty() { 0.0 } else { covered / lines.len() as f64 },
+                "branchRate": if *br_tot > 0 { *br_cov as f64 / *br_tot as f64 } else { 0.0 },
+                "lines": line_json,
+                "branchesCovered": br_cov,
+                "branchesTotal": br_tot,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": project_id, "name": project_id,
+            "commitSha": "abc", "branch": "main", "target": target
+        },
+        "coverage": {
+            "lineRate": 0.5, "branchRate": 0.5,
+            "linesCovered": 1, "linesTotal": 2,
+            "branchesCovered": files.iter().map(|f| f.1).sum::<i64>(),
+            "branchesTotal": files.iter().map(|f| f.2).sum::<i64>()
+        },
+        "files": file_json
+    })
+    .to_string()
+}
+
+/// Composite must union shared files rather than counting them twice.
+#[tokio::test]
+async fn composite_unions_files_shared_between_targets() {
+    let db = test_db().await;
+
+    // The same file, exercised on different lines by two targets.
+    let unit = report_with_branches(
+        "composite",
+        "JVM_UNIT",
+        &[("pkg/Shared.kt", 0, 0, &[(1, 1), (2, 0), (3, 0), (4, 0)])],
+    );
+    let instrumented = report_with_branches(
+        "composite",
+        "ANDROID_INSTRUMENTED",
+        &[("pkg/Shared.kt", 0, 0, &[(1, 0), (2, 1), (3, 0), (4, 0)])],
+    );
+    assert_eq!(ingest(&db, unit).await, 201);
+    assert_eq!(ingest(&db, instrumented).await, 201);
+
+    let (status, html) = get_text(&db, "/projects/composite").await;
+    assert_eq!(status, 200);
+
+    // Union: 4 distinct lines, 2 covered. Summing would claim 8 lines — twice
+    // as many as the file actually has.
+    assert!(
+        html.contains("2 / 4 lines"),
+        "composite should union the shared file to 2/4 lines; summing would give 2/8"
+    );
+    assert!(
+        !html.contains("/ 8 lines"),
+        "composite double-counted a file present in both targets"
+    );
+}
+
+/// A project with two series must not answer /latest with an arbitrary one.
+#[tokio::test]
+async fn latest_requires_a_series_when_several_exist() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("multi", "Multi", "a/B.kt")).await, 201);
+
+    // One series: the parameters are optional.
+    let req = Request::get("/api/v1/coverage/multi/latest").body(Body::empty()).unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 200);
+
+    // Add a second series.
+    let other = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {
+            "id": "multi", "name": "Multi",
+            "commitSha": "abc", "branch": "main", "target": "ANDROID_INSTRUMENTED"
+        },
+        "coverage": {
+            "lineRate": 0.9, "branchRate": 0.9,
+            "linesCovered": 9, "linesTotal": 10,
+            "branchesCovered": 9, "branchesTotal": 10
+        },
+        "files": []
+    })
+    .to_string();
+    assert_eq!(ingest(&db, other).await, 201);
+
+    // Ambiguous now — the caller must choose rather than get a coin flip.
+    let req = Request::get("/api/v1/coverage/multi/latest").body(Body::empty()).unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 300);
+
+    // Naming the target resolves it.
+    let req = Request::get("/api/v1/coverage/multi/latest?target=ANDROID_INSTRUMENTED")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(db.clone(), req).await;
+    assert_eq!(status, 200);
+    assert_eq!(json_body(&body)["target"], "ANDROID_INSTRUMENTED");
+
+    // And the series list tells them what is available.
+    let req = Request::get("/api/v1/coverage/multi/series").body(Body::empty()).unwrap();
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 200);
+    assert_eq!(json_body(&body).as_array().unwrap().len(), 2);
+}
+
+/// Trends must not interleave two series into one sawtooth line.
+#[tokio::test]
+async fn trend_returns_a_single_series() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("trendy", "T", "a/B.kt")).await, 201);
+    assert_eq!(ingest(&db, report_with("trendy", "T", "a/B.kt")).await, 201);
+
+    let req = Request::get("/api/v1/coverage/trendy/trend?target=JVM_UNIT")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 200);
+    let points = json_body(&body);
+    let points = points.as_array().unwrap();
+    assert_eq!(points.len(), 2);
+    assert!(
+        points.iter().all(|p| p["target"] == "JVM_UNIT" && p["source"] == "omnivore-agent"),
+        "trend mixed series"
+    );
+}
