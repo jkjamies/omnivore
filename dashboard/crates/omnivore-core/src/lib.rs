@@ -1,3 +1,4 @@
+pub mod crypto;
 pub mod github;
 pub mod model;
 pub mod parsers;

@@ -147,19 +147,18 @@ pub async fn file_source_fragment(
             // user's own repository access. Fall back to the server token only
             // when OAuth is off — i.e. when the operator has already declared
             // the whole instance open.
-            let user = viewer;
-            let user_token = user.as_ref().map(|u| u.github_token.clone());
-            let env_token = if user.is_some() {
+            let user_token = viewer.as_ref().map(|u| u.github_token.clone());
+            let env_token = if viewer.is_some() {
                 None
             } else {
                 std::env::var("GITHUB_TOKEN").ok()
             };
             let effective_token = user_token.as_deref().or(env_token.as_deref());
 
-            if let Some(ref u) = user {
+            if let Some(ref u) = viewer {
                 tracing::info!(username = %u.username, "Source fetch using logged-in user's token");
             } else if env_token.is_some() {
-                tracing::info!("Source fetch using server GITHUB_TOKEN");
+                tracing::info!("Source fetch using server GITHUB_TOKEN (open instance)");
             } else {
                 tracing::info!("Source fetch with no token (public repos only)");
             }
