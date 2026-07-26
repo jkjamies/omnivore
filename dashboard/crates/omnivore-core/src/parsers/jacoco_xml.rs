@@ -201,7 +201,7 @@ pub fn parse(
         }
     });
 
-    let report_out = OmnivoreReport {
+    let mut report_out = OmnivoreReport {
         version: "0.1.0".into(),
         format: "jacoco-xml".into(),
         dependencies: None,
@@ -224,7 +224,7 @@ pub fn parse(
         files,
     };
 
-    let snapshot = CoverageSnapshot::from_report(&report_out, Some(source));
+    let snapshot = CoverageSnapshot::from_report(&mut report_out, Some(source));
     Ok((report_out, snapshot))
 }
 

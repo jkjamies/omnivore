@@ -10,6 +10,12 @@ use omnivore_core::storage::Database;
 use super::{fmt_delta_html, fmt_pct_val, html_escape, rate_color_val};
 use crate::routes::auth;
 
+/// Ceiling on rows rendered when there is no source to show alongside them.
+///
+/// Larger than any file anyone reads in a browser, and small enough that a
+/// stored bad line number costs a long page rather than the process.
+const MAX_RENDERED_LINES: i32 = 50_000;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineStatus {
     Covered,
@@ -67,7 +73,16 @@ impl FileCoveragePage {
         } else if self.file.lines.is_empty() {
             return vec![];
         } else {
-            self.file.lines.iter().map(|l| l.line_number).max().unwrap_or(1)
+            // With no source to display, the page still renders one row per line
+            // up to the highest line with coverage — so this number comes from
+            // stored data and decides how much this request allocates.
+            //
+            // Ingest now rejects implausible line numbers, but a database
+            // written before that does not get retroactively cleaned, and this
+            // is a *read* path: whoever opens the page pays. Bound it here too,
+            // so upgrading is enough to stop the bleeding without a migration.
+            let highest = self.file.lines.iter().map(|l| l.line_number).max().unwrap_or(1);
+            highest.min(MAX_RENDERED_LINES)
         };
 
         (1..=max_line)

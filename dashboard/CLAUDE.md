@@ -159,6 +159,16 @@ All parsers normalize to `(OmnivoreReport, CoverageSnapshot)` — a common model
 | Python coverage.py | `parsers::python_coverage` | `coverage json` output | Python projects (native format, no conversion) |
 | JaCoCo/Kover XML | `parsers::jacoco_xml` | JaCoCo `report.xml` / Kover `koverXmlReport` | Kotlin/Android/JVM projects using JaCoCo or Kover instead of the Omnivore agent |
 
+**Line numbers are bounded at ingest.** `CoverageSnapshot::from_report` takes
+`&mut OmnivoreReport` and drops records outside `1..=MAX_LINE_NUMBER`
+(2,000,000) before serializing `files_json`. It is `&mut` on purpose: it is the
+one function every parser funnels through, so a new format cannot forget. The
+file coverage page renders a row per line up to the highest line it sees, so an
+unbounded line number was a stored denial of service against whoever opened the
+page next — see `docs/CODEBASE-REVIEW.md` §3b.2. Go coverprofile additionally
+rejects implausible *block ranges*, because it is the only format where one
+record expands into many.
+
 For every format except omnivore JSON, project metadata (id, name, commit, branch) is supplied via the shared `parsers::IngestMeta` struct (mapped from query params in the API). Each parser normalizes through `CoverageSnapshot::from_report`, which persists the `target` in canonical `SCREAMING_SNAKE_CASE` and records the `source` (provenance).
 
 **Target vs. source:** `target` is the execution environment (`JVM_UNIT`, `ANDROID_INSTRUMENTED`, …); `source` is the tool that produced the data (`omnivore-agent`, `kover`, `jacoco`, `llvm-cov`, `lcov`, `go`, `python-coverage`). They are stored as separate columns and the dashboard keys trends + retention on the `(target, source)` pair, so two tools measuring the same target render as two independent series. JaCoCo/Kover XML defaults its target to `JVM_UNIT` (overridable via `?target=`); the `source` is `kover` or `jacoco` per the format alias used.
