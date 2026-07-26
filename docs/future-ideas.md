@@ -2,6 +2,11 @@
 
 Enhancements and features under consideration. Items marked with complexity estimates.
 
+> This is a backlog, not a plan — items here are sized, not sequenced. See
+> [PRODUCT-STRATEGY.md](PRODUCT-STRATEGY.md) for which of these actually matter
+> and why, including several that it recommends **not** building. Its appendix
+> reconciles the two documents where they disagree.
+
 ## Coverage Quality
 
 ### Diff Coverage (Medium)
