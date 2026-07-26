@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.Locale
 
 /**
  * Tests for the report generation pipeline:
@@ -381,6 +382,35 @@ class ReportGenerationTest {
         assertTrue(htmlFile.exists())
         assertTrue(jsonFile.length() > 0)
         assertTrue(htmlFile.length() > 0)
+    }
+
+    /**
+     * The HTML report puts percentages inside `style="width: N%"`.
+     *
+     * `"%.1f".format(x)` formats with the *default locale*, so on a machine set
+     * to a comma-decimal locale the report contained `width: 85,3%` — an invalid
+     * CSS declaration browsers drop, leaving every coverage bar at zero width.
+     * Nobody building in an English locale would ever see it.
+     */
+    @Test
+    fun `HtmlReportWriter uses a dot decimal separator regardless of locale`() {
+        val original = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("de-DE"))
+
+            val file = File(tempDir, "locale.html")
+            HtmlReportWriter.write(file, buildSampleAnalysisResult())
+            val html = file.readText()
+
+            assertTrue(
+                Regex("""width: \d+\.\d+%""").containsMatchIn(html),
+                "expected a dot-separated width, got: " +
+                    Regex("""width: [^;"]+""").findAll(html).joinToString().take(200)
+            )
+            assertFalse(html.contains(Regex("""width: \d+,\d""")), "comma decimal reached the CSS")
+        } finally {
+            Locale.setDefault(original)
+        }
     }
 
     // -- Helper --

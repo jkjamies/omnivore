@@ -653,6 +653,113 @@ until the code was read. A summary at the end of `omnivoreReport` — "instrumen
 412 classes, skipped 38 (12 no line numbers, 26 filtered)" — would make the next
 one obvious.
 
+## Part 3b — Third pass: resource exhaustion
+
+A pass specifically looking for inputs whose *cost* is unbounded, rather than
+inputs whose *content* is wrong. The earlier passes checked that attacker-supplied
+strings could not become script; this one asks what an attacker-supplied
+**number** can cost. Ingest is unauthenticated on a default install, so the
+budget for an attack is one HTTP request.
+
+### 3b.1 A 33-byte upload could exhaust the server's memory — **high**
+
+The Go coverprofile format is the one format where a record *expands*. A line is
+
+```
+github.com/foo/bar/file.go:10.2,15.3 2 5
+```
+
+— a block spanning lines 10 to 15 — and the parser emitted one coverage record
+per line in the range:
+
+```rust
+for ln in start_line..=end_line { … }
+```
+
+Nothing bounded the range. `a.go:1.0,2000000000.0 1 1` is 33 bytes and asks for
+two billion `HashMap` entries. Output size scaled with the *value* in the input,
+not its length, so `OMNIVORE_MAX_UPLOAD_BYTES` (32 MiB) was no protection at all
+— the amplification factor is roughly 60 million to one.
+
+Measured before the fix, on this hardware:
+
+| end line | request body | records produced | time |
+|---|---|---|---|
+| 10,000 | 31 bytes | 10,000 | 0.03 s |
+| 100,000 | 32 bytes | 100,000 | 0.31 s |
+| 1,000,000 | 33 bytes | 1,000,000 | 4.2 s |
+| 5,000,000 | 33 bytes | 5,000,000 | 18.6 s |
+
+Note the cost is worse than linear. `i32::MAX` is 400× the last row.
+
+Fixed by rejecting — not clamping — block ranges outside `1..=MAX_LINE_NUMBER`,
+inverted ranges, and non-positive start lines, plus a ceiling on the total
+number of lines one profile may expand to (many individually plausible blocks
+still add up). Rejecting is right here: a block claiming to span more lines than
+any real file has is not a report that can be salvaged, and truncating it would
+report coverage the profile never described.
+
+### 3b.2 One stored line number turned a page view into a denial of service — **high**
+
+Worse than 3b.1, because it is persistent and fires on *read*.
+
+`file_coverage.rs` renders one row per line from 1 up to the highest line it has
+coverage for:
+
+```rust
+let max_line = self.file.lines.iter().map(|l| l.line_number).max().unwrap_or(1);
+(1..=max_line).map(|n| … LineRow { … }).collect()
+```
+
+Line numbers were never validated on ingest, in any format. A single record —
+`{"lineNumber": 2000000000, "hitCount": 1}` in an omnivore report, or
+`DA:2000000000,1` in lcov, or one entry in a Python `executed_lines` array —
+made every subsequent request for that file's page attempt to allocate two
+billion `LineRow` structs, each owning a `String`.
+
+The chain: an unauthenticated upload writes the record; the record persists; the
+victim is whoever opens the page next, which on a dashboard is quite likely an
+operator. One small POST, indefinite denial of service, no way to tell from the
+project list that anything is wrong.
+
+Fixed in two places, deliberately:
+
+- **At ingest**, in `CoverageSnapshot::from_report` — the one function every
+  parser funnels through on its way to storage, and the function that serializes
+  `files_json`, which is what the page reads back. Records outside
+  `1..=MAX_LINE_NUMBER` are dropped and the count logged. The upload still
+  succeeds: a genuinely broken producer should keep the coverage it measured
+  correctly, and an attacker gains nothing either way. Taking `&mut` means a
+  seventh format cannot forget to sanitize.
+- **At render**, with a 50,000-row ceiling when there is no source to display.
+  A database written before this change is not retroactively cleaned, so without
+  the second bound an operator would have to migrate their data to stop the
+  bleeding. Upgrading is enough.
+
+### 3b.3 Coverage bars rendered at zero width outside English locales — **low**
+
+`"%.1f".format(x)` in Kotlin formats with the **default locale**, and the HTML
+report interpolates the result into `style="width: N%"`. On a machine set to a
+comma-decimal locale that produced `width: 85,3%` — an invalid CSS declaration
+browsers discard, leaving every bar empty. Invisible to anyone developing in an
+English locale, which is why it survived.
+
+Now formatted with `Locale.ROOT`, in the HTML writer, the Markdown writer, and
+the `omnivoreReport` console summary. `HtmlReportWriter uses a dot decimal
+separator regardless of locale` pins it by setting the default locale to `de-DE`
+for the duration of the test — verified to fail without the fix.
+
+### Not fixed — an operator decision, not a defect
+
+**`publish.yml` will publish any `v*` tag to Maven Central and the Gradle Plugin
+Portal.** There is no check that the tag is reachable from `main`, and no
+GitHub Environment gating the job, so anyone who can push a tag can cut a
+release under the project's identity with its signing key. That is a
+supply-chain exposure rather than a bug, and the two obvious mitigations —
+requiring the tag to be an ancestor of the default branch, or putting the job
+behind an `environment:` with required reviewers — both change how releases are
+cut. Left for the maintainer to choose rather than altered unilaterally.
+
 ## Part 4 — What is validated, and what isn't
 
 The review touched instrumentation, aggregation, authorization, and the build,
@@ -697,6 +804,8 @@ that is not trustworthy cannot be evidence.
 | Authorization, CSRF, rate limiting | Unit and API tests, plus a manual pass against a running server |
 | Migration of a pre-existing database | `migrates_a_database_created_by_an_older_version` — a regression test for a startup failure this review introduced and then caught |
 | Ingest of every supported format | Parser tests plus the test rigs; the Go rig has been driven end-to-end into a live dashboard |
+| Bounds on line numbers and Go block ranges | `rejects_a_block_range_no_real_file_could_have`, `rejects_a_profile_that_expands_past_the_total_ceiling`, `implausible_line_numbers_are_dropped_at_ingest`; the amplification was measured before fixing and the real Go rig profile re-parsed after |
+| Locale-independent report formatting | `HtmlReportWriter uses a dot decimal separator regardless of locale`, verified to fail without the fix |
 | `docker build` and a health check | `dashboard.yml` |
 | Plugin compiles against real AGP | `plugin.yml` |
 
