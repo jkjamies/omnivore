@@ -577,7 +577,11 @@ async fn project_detail_page_after_ingest() {
 
 #[tokio::test]
 async fn end_to_end_test_rig_report() {
-    let report = include_str!("../../../../test-rigs/kmp-test-rig/build/reports/omnivore/omnivore-report.json");
+    // A committed fixture, not a Gradle build artifact. `include_str!` of
+    // `test-rigs/kmp-test-rig/build/...` meant `cargo test` failed to *compile*
+    // on a clean checkout until someone had run the Gradle rig first, which
+    // silently made the dashboard's whole test suite un-runnable in CI.
+    let report = include_str!("fixtures/kmp-test-rig-report.json");
 
     let db = test_db().await;
 
@@ -649,7 +653,6 @@ async fn retention_prunes_old_snapshots() {
     let db = test_db().await;
 
     // Set low retention limits for testing via DB
-    use omnivore_core::model::settings::GlobalSettings;
     let mut settings = db.get_global_settings().await.unwrap();
     settings.retention_full = 3;
     settings.retention_summary = 2;
@@ -714,4 +717,78 @@ async fn retention_prunes_old_snapshots() {
         std::env::remove_var("OMNIVORE_RETENTION_FULL");
         std::env::remove_var("OMNIVORE_RETENTION_SUMMARY");
     }
+}
+
+/// Starting against a database created by an older Omnivore must work.
+///
+/// Regression test for a startup-blocking bug: `run_migrations` applied
+/// `schema.sql` before the guarded `ALTER TABLE`s, and `schema.sql` contains an
+/// index over `coverage_snapshots.source`. On an existing database
+/// `CREATE TABLE IF NOT EXISTS` is a no-op, so the column did not exist yet and
+/// index creation failed with "no such column: source" — the server refused to
+/// start, and no test caught it because every test built its database from
+/// `schema.sql` in the first place.
+#[tokio::test]
+async fn migrates_a_database_created_by_an_older_version() {
+    let dir = std::env::temp_dir().join(format!("omnivore-upgrade-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.join("legacy.db").display());
+
+    // The schema as it existed before this change: no `source` column, no
+    // tags/ratchet/retention columns, and no sessions or permission_cache.
+    {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        for stmt in [
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                github_repo TEXT, source_root TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+            "CREATE TABLE coverage_snapshots (id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id), commit_sha TEXT, branch TEXT,
+                target TEXT NOT NULL, line_rate REAL NOT NULL, branch_rate REAL NOT NULL,
+                lines_covered INTEGER NOT NULL, lines_total INTEGER NOT NULL,
+                branches_covered INTEGER NOT NULL, branches_total INTEGER NOT NULL,
+                file_count INTEGER NOT NULL, created_at TEXT NOT NULL, files_json TEXT)",
+            "CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id = 1),
+                default_line_threshold REAL NOT NULL DEFAULT 0.8,
+                default_branch_threshold REAL NOT NULL DEFAULT 0.8)",
+            "INSERT INTO settings (id) VALUES (1)",
+            "INSERT INTO projects VALUES ('legacy','Legacy App',NULL,NULL,NULL,
+                '2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')",
+            "INSERT INTO coverage_snapshots VALUES ('s1','legacy','abc','main','JVM_UNIT',
+                0.5,0.5,5,10,1,2,1,'2024-01-01T00:00:00Z','[]')",
+        ] {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+    }
+
+    // The actual assertion: this must not error.
+    let db = Database::new(&url)
+        .await
+        .expect("migrating an older database must succeed");
+
+    // Existing data survives, and `source` backfills to the native agent.
+    let project = db.get_project("legacy").await.unwrap();
+    assert!(project.is_some(), "the legacy project should still be present");
+    assert!(
+        !project.unwrap().ratchet_enabled,
+        "columns added by the ALTER phase should be readable"
+    );
+
+    let snapshot = db.get_latest_snapshot("legacy").await.unwrap().unwrap();
+    assert_eq!(snapshot.target, "JVM_UNIT");
+    assert_eq!(
+        snapshot.source, "omnivore-agent",
+        "rows predating multi-source ingestion backfill to the native agent"
+    );
+
+    // Re-opening is idempotent.
+    Database::new(&url)
+        .await
+        .expect("running migrations twice must be a no-op");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

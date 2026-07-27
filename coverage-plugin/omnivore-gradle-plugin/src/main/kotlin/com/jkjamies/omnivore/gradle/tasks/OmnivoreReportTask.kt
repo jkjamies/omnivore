@@ -21,6 +21,7 @@ import org.gradle.api.tasks.*
 import org.gradle.internal.logging.text.StyledTextOutput
 import org.gradle.internal.logging.text.StyledTextOutput.Style
 import org.gradle.internal.logging.text.StyledTextOutputFactory
+import org.gradle.work.DisableCachingByDefault
 import java.io.File
 
 /**
@@ -32,6 +33,10 @@ import java.io.File
  * When both unit and instrumented test data is present, reports them as
  * separate sections with independent thresholds rather than merging.
  */
+@DisableCachingByDefault(
+    because = "Reads .omnivore/.probes files written as a side effect of test execution, " +
+        "which are not declared inputs. A cache hit would serve a report for a different run.",
+)
 abstract class OmnivoreReportTask : DefaultTask() {
 
     @get:Internal

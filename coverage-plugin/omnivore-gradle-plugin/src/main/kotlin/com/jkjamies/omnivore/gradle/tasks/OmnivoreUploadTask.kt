@@ -4,6 +4,7 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
+import org.gradle.work.DisableCachingByDefault
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -18,6 +19,10 @@ import java.net.URI
  *
  * Usage: `./gradlew omnivoreUpload`
  */
+@DisableCachingByDefault(
+    because = "POSTs to a dashboard. The result is a remote side effect with no output to cache, " +
+        "and a cache hit would silently skip the upload.",
+)
 abstract class OmnivoreUploadTask : DefaultTask() {
 
     @get:Internal
