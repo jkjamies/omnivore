@@ -71,7 +71,7 @@ impl ProjectDetailPage {
                 "data": t.trend,
             })
         }).collect();
-        serde_json::to_string(&datasets).unwrap_or_else(|_| "[]".to_string())
+        super::json_for_script(&datasets, "[]")
     }
     fn hotspots(&self) -> Vec<HotspotFile> {
         let mut all: Vec<HotspotFile> = Vec::new();

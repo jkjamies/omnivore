@@ -15,7 +15,9 @@ struct DependencyGraphPage {
 
 impl DependencyGraphPage {
     fn graph_json(&self) -> String {
-        serde_json::to_string(&self.graph).unwrap_or_else(|_| r#"{"modules":[],"edges":[]}"#.to_string())
+        // Module names and groups come from uploaded reports, so this must be
+        // script-safe, not merely valid JSON.
+        super::json_for_script(&self.graph, r#"{"modules":[],"edges":[]}"#)
     }
     fn internal_count(&self) -> usize {
         use omnivore_core::model::coverage::ModuleType;

@@ -70,26 +70,45 @@ The ingest endpoint supports automatic GitHub PR comments. Pass these query para
 - `pr_number` — PR number to comment on
 - `base_branch` — branch to compare against (default: `main`)
 
-GitHub token via `X-GitHub-Token` header (preferred in CI) or `GITHUB_TOKEN` env var on the server.
+GitHub token via `X-GitHub-Token` header (preferred in CI — the comment is then written with the caller's own credentials) or `GITHUB_TOKEN` env var on the server. The server token is a fallback used **only** when `github_repo` matches the repository the project is linked to, so an ingest caller can't direct the dashboard to comment on arbitrary repos. `github_repo` must be a well-formed `owner/name` slug (`omnivore_core::validation::is_valid_repo_slug`) before it is interpolated into any GitHub URL.
 
 The comment includes: coverage summary with delta vs base branch, status badge, file breakdown (collapsible), and dashboard link. Comments are updated in-place on subsequent pushes (marker-based detection).
 
 ## Database
 
-SQLite with embedded schema creation (no migration files). Connection pool: max 5.
+SQLite. Table creation lives in `crates/omnivore-core/schema.sql`; column-add migrations for existing deployments are guarded `ALTER TABLE`s in `run_migrations`.
+
+Connection pool: max 5, opened with `SqliteConnectOptions` setting `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=NORMAL` and a 5s busy timeout. These are **per-connection** pragmas, which is why they are set through connect options rather than executed as a query against the pool — a bare `PRAGMA foreign_keys = ON` only applies to whichever pooled connection happened to run it.
 
 **Environment variables:**
 - `DATABASE_URL` — default: `sqlite:omnivore.db?mode=rwc`
 - `BIND_ADDR` — default: `0.0.0.0:3000`
 - `RUST_LOG` — default: `info`
 - `GITHUB_TOKEN` — (optional) GitHub token for PR comments and on-demand source fetching; can also be passed per-request via `X-GitHub-Token` header
-- `OMNIVORE_DASHBOARD_URL` — (optional) public URL of this server, used for "View report" links in PR comments
-- `OMNIVORE_RETENTION_FULL` — (optional, default 30) newest N snapshots per project+target keep full file data
+- `OMNIVORE_DASHBOARD_URL` — (optional) public URL of this server; used for "View report" links and to decide the default for `OMNIVORE_COOKIE_SECURE`
+- `OMNIVORE_RETENTION_FULL` — (optional, default 30) newest N snapshots per project+target+source keep full file data
 - `OMNIVORE_RETENTION_SUMMARY` — (optional, default 60) next N snapshots kept as summary-only for trend charts
 - `OMNIVORE_STATIC_DIR` — (optional) path to static assets directory; defaults to compile-time path (set in Docker)
 - `GITHUB_CLIENT_ID` — (optional) GitHub OAuth App client ID; enables login/auth
 - `GITHUB_CLIENT_SECRET` — (optional) GitHub OAuth App client secret
+- `OMNIVORE_GITHUB_SCOPES` — (optional, default `read:user,read:org`) OAuth scopes; add `repo` only if the source view must reach private repositories
+- `OMNIVORE_ADMIN_USERS` — (optional) comma-separated GitHub usernames granted dashboard admin
 - `OMNIVORE_GITHUB_ORG` — (optional) GitHub org for admin resolution (org owners = dashboard admins)
+- `OMNIVORE_COOKIE_SECURE` — (optional) force the `Secure` flag on auth cookies; defaults to on when `OMNIVORE_DASHBOARD_URL` is `https://`
+- `OMNIVORE_REQUIRE_API_KEY` — (optional, default false) require `X-API-Key` on write endpoints unconditionally
+- `OMNIVORE_CORS_ORIGINS` — (optional, default same-origin) comma-separated allowed origins, or `*`
+- `OMNIVORE_MAX_UPLOAD_BYTES` — (optional, default 32 MiB) ingest body ceiling
+- `OMNIVORE_RATCHET_BRANCHES` — (optional, default `main,master`) branches whose snapshots may raise a ratchet floor
+
+## Authorization
+
+Two independent mechanisms; see `dashboard/README.md#security-model` for the operator-facing description.
+
+- **Browsing** is gated by GitHub OAuth, and only when `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` are set — otherwise every guard short-circuits and the instance is open by design.
+- **Project mutations** (`/projects/{id}/settings`, thresholds, tags, ratchet, delete, API keys) go through `require_project_write_middleware`: dashboard admin, or admin/maintain/write on the project's linked repo. A project with no linked repo is admin-only. Note this is repo-derived, so it depends on `github_repo` being trustworthy — which is why only authenticated callers can set it.
+- **Global settings and global API keys** need `is_dashboard_admin`, resolved from `OMNIVORE_ADMIN_USERS` then `OMNIVORE_GITHUB_ORG`. There is deliberately no "admin on any linked repo" fallback: projects are auto-created by ingest, so that rule let anyone with ingest access self-promote by linking a repo they own.
+- **Write APIs** (ingest, project create/update) use `routes::api_auth`, keyed on `X-API-Key`. Project-scoped keys are checked against the target project.
+- **The source fragment** (`/api/v1/source/...`) requires a session when OAuth is on, and only falls back to the server's `GITHUB_TOKEN` when OAuth is off. It fetches with a token and caches the result, so serving it anonymously would leak private source to every later visitor.
 
 **Tables:**
 
@@ -184,6 +203,25 @@ HTMX + Askama 0.15 templates with Chart.js for trend graphs.
 - Project pinning via localStorage, sparkline trend graphs (SVG polylines)
 - Project tags/labels with tag filter bar
 - Ingest activity log on home page and project detail pages
+
+**Escaping — everything below is attacker-controlled on an open instance.**
+Project names, file paths, and dependency module names all arrive via ingest.
+Askama auto-escapes `{{ }}`, but several handlers build HTML by hand, so:
+
+- Use `routes::pages::html_escape` for HTML text and attributes. It escapes `'`
+  as well as `&<>"` — the file tree interpolates paths into
+  `onclick="toggleDir(this, '…')"`, where an unescaped single quote closes the
+  JS string.
+- Use `routes::pages::json_for_script` for any JSON embedded in an inline
+  `<script>` (`graph_json`, `all_trends_json`). `serde_json` does not escape
+  `<`, so a raw `</script>` in a module name closes the element before the JS
+  parser ever runs.
+- `routes::embed` XML-escapes the project name. The embed is served as
+  `image/svg+xml`; opened directly, an SVG is a document and inline script
+  executes on this origin.
+- A CSP and `X-Content-Type-Options: nosniff` are set globally in
+  `build_router` as a backstop. It still needs `'unsafe-inline'` for the pages'
+  inline scripts, so it bounds script *origin*, not injection.
 
 **Coverage targets:** `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`, `RUST_LLVM_COV`, `GO_COVER`, `PYTHON_COVERAGE`, `LCOV` — each parser sets the appropriate target automatically (JaCoCo/Kover default to `JVM_UNIT`, overridable via `?target=`). Orthogonal to target is **source** (provenance): `omnivore-agent`, `kover`, `jacoco`, `llvm-cov`, `lcov`, `go`, `python-coverage`. The `(target, source)` pair is the unit the dashboard trends and prunes on.
 

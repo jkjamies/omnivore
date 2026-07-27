@@ -5,7 +5,11 @@ use crate::model::session::Session;
 use crate::model::settings::GlobalSettings;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
+use std::str::FromStr;
+use std::time::Duration;
 
 /// Result of the ratchet check performed during ingest.
 #[derive(Debug, Default)]
@@ -23,9 +27,25 @@ pub struct Database {
 
 impl Database {
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
+        // Connection-level PRAGMAs must be set per connection, not once against
+        // a pooled connection — `PRAGMA foreign_keys = ON` executed as a plain
+        // query only applies to whichever of the pool's connections ran it, so
+        // ON DELETE CASCADE silently did nothing on the other four.
+        //
+        // WAL + a busy timeout matter for the self-hosted case: with the
+        // default rollback journal, a page render reading while an ingest
+        // writes fails outright with SQLITE_BUSY instead of waiting.
+        let options = SqliteConnectOptions::from_str(database_url)?
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(5));
+
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .acquire_timeout(Duration::from_secs(10))
+            .connect_with(options)
             .await?;
 
         let db = Self { pool };
@@ -225,11 +245,6 @@ impl Database {
                 .await?;
         }
 
-        // Enable foreign keys for CASCADE support
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&self.pool)
-            .await?;
-
         // Phase 3: indexes, now that every column they reference exists.
         for statement in indexes {
             sqlx::query(statement).execute(&self.pool).await?;
@@ -350,17 +365,31 @@ impl Database {
         self.get_project(id).await
     }
 
+    /// Delete a project and everything that references it.
+    ///
+    /// Runs in one transaction so a failure part-way through can't leave
+    /// orphaned snapshots or, worse, live API keys pointing at a project that
+    /// no longer exists.
     pub async fn delete_project(&self, id: &str) -> Result<(), sqlx::Error> {
-        // Delete snapshots first (foreign key), then source cache, then project
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("DELETE FROM coverage_snapshots WHERE project_id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
+            .await?;
+        // Project-scoped keys authorise uploads to this project; they must not
+        // outlive it. The schema declares ON DELETE CASCADE, but deleting
+        // explicitly keeps this correct regardless of the foreign_keys pragma.
+        sqlx::query("DELETE FROM api_keys WHERE project_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM projects WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
-        Ok(())
+
+        tx.commit().await
     }
 
     // -- Global settings --
@@ -1080,12 +1109,18 @@ impl Database {
                     .map(|floor| snapshot.branch_rate < floor)
                     .unwrap_or(false);
 
-                // Advance floor (only updates if new rate is higher, thanks to MAX in SQL)
-                self.advance_ratchet_floor(
-                    &snapshot.project_id,
-                    snapshot.line_rate,
-                    snapshot.branch_rate,
-                ).await?;
+                // Only a release-line build may raise the floor. Advancing on
+                // every ingest let a one-off feature branch permanently raise
+                // the bar for the whole project — and, because the branch was
+                // never merged, raise it to a number no build on the main line
+                // could reach again.
+                if is_ratchet_branch(snapshot.branch.as_deref()) {
+                    self.advance_ratchet_floor(
+                        &snapshot.project_id,
+                        snapshot.line_rate,
+                        snapshot.branch_rate,
+                    ).await?;
+                }
 
                 RatchetResult {
                     line_floor_violated: line_violated,
@@ -1321,6 +1356,24 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+/// Branches whose snapshots are allowed to raise a project's ratchet floor.
+///
+/// Defaults to the usual release lines; override with a comma-separated
+/// `OMNIVORE_RATCHET_BRANCHES`. A snapshot with no branch recorded still
+/// counts, since single-branch setups often omit it.
+fn is_ratchet_branch(branch: Option<&str>) -> bool {
+    let Some(branch) = branch.map(str::trim).filter(|b| !b.is_empty()) else {
+        return true;
+    };
+    match std::env::var("OMNIVORE_RATCHET_BRANCHES") {
+        Ok(list) if !list.trim().is_empty() => list
+            .split(',')
+            .map(str::trim)
+            .any(|allowed| !allowed.is_empty() && allowed.eq_ignore_ascii_case(branch)),
+        _ => branch.eq_ignore_ascii_case("main") || branch.eq_ignore_ascii_case("master"),
     }
 }
 

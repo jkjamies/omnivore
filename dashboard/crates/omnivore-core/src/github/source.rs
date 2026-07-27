@@ -1,3 +1,4 @@
+use crate::validation::{is_safe_repo_path, is_valid_repo_slug};
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -15,6 +16,17 @@ pub async fn fetch_source(
     commit_sha: Option<&str>,
     github_token: Option<&str>,
 ) -> Option<String> {
+    // Both values land in the URL path, and both originate from data the
+    // dashboard accepted over the network (project settings and coverage
+    // reports). Validate before building the request.
+    if !is_valid_repo_slug(github_repo) || !is_safe_repo_path(file_path) {
+        tracing::warn!(repo = %github_repo, path = %file_path, "Rejected unsafe source fetch");
+        return None;
+    }
+    if commit_sha.is_some_and(|sha| !is_valid_git_ref(sha)) {
+        return None;
+    }
+
     let client = Client::new();
     let git_ref = commit_sha.unwrap_or("HEAD");
     let url = format!(
@@ -36,6 +48,18 @@ pub async fn fetch_source(
     } else {
         None
     }
+}
+
+/// A git ref safe to interpolate into a URL path: a commit SHA, tag, or branch
+/// name without traversal or separators of its own.
+fn is_valid_git_ref(git_ref: &str) -> bool {
+    !git_ref.is_empty()
+        && git_ref.len() <= 100
+        && git_ref != "."
+        && git_ref != ".."
+        && git_ref
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 // -- Repo tree cache for file path resolution --
@@ -120,6 +144,11 @@ async fn get_or_fetch_tree(
     github_repo: &str,
     github_token: Option<&str>,
 ) -> Option<HashMap<String, Vec<String>>> {
+    if !is_valid_repo_slug(github_repo) {
+        tracing::warn!(repo = %github_repo, "Rejected tree fetch for invalid repo slug");
+        return None;
+    }
+
     // Check cache
     {
         let cache = TREE_CACHE.lock().ok()?;

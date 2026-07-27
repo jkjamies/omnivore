@@ -29,8 +29,55 @@ All configuration is via environment variables:
 | `OMNIVORE_RETENTION_SUMMARY` | `60` | Summary-only snapshots to keep beyond full |
 | `GITHUB_CLIENT_ID` | — | GitHub OAuth App client ID (enables login) |
 | `GITHUB_CLIENT_SECRET` | — | GitHub OAuth App client secret |
+| `OMNIVORE_GITHUB_SCOPES` | `read:user,read:org` | OAuth scopes requested at login. Add `repo` only if you need the source view for private repositories |
+| `OMNIVORE_ADMIN_USERS` | — | Comma-separated GitHub usernames who are dashboard admins |
 | `OMNIVORE_GITHUB_ORG` | — | GitHub org for admin resolution (org owners = dashboard admins) |
+| `OMNIVORE_COOKIE_SECURE` | *(auto)* | Force the `Secure` flag on auth cookies. Defaults to on when `OMNIVORE_DASHBOARD_URL` is `https://` |
+| `OMNIVORE_REQUIRE_API_KEY` | `false` | Require `X-API-Key` on all write endpoints, even before any key exists |
+| `OMNIVORE_CORS_ORIGINS` | *(same-origin)* | Comma-separated allowed origins, or `*` for any |
+| `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum accepted ingest body (32 MiB) |
+| `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a project's ratchet floor |
 | `OMNIVORE_STATIC_DIR` | *(compile-time)* | Path to static assets directory (set in Docker) |
+
+## Security model
+
+The dashboard has two independent access-control mechanisms. Understand both
+before exposing an instance beyond localhost.
+
+**Read access (browsing) — GitHub OAuth.** Set `GITHUB_CLIENT_ID` and
+`GITHUB_CLIENT_SECRET` to enable login. Without them the dashboard runs fully
+open by design: anyone who can reach the port can browse every project.
+
+Once OAuth is on:
+
+- Project settings, deletion, and API-key management require **write access to
+  the project's linked GitHub repository** (admin/maintain/write), or dashboard
+  admin. A project with no linked repository is admin-only.
+- Global settings and global API keys require **dashboard admin**, which comes
+  from `OMNIVORE_ADMIN_USERS` or `OMNIVORE_GITHUB_ORG`. If neither is set, no
+  one is an admin.
+- The on-demand source view requires a login, because it spends a GitHub token
+  and caches the result.
+- Coverage *numbers* remain world-readable. If your coverage percentages are
+  themselves sensitive, put the dashboard behind a reverse proxy that
+  authenticates.
+
+**Write access (uploads) — API keys.** For backwards compatibility, ingest and
+the project write API are open while no API key exists in the database. Create
+a key on the Settings page and every write endpoint starts requiring it. Set
+`OMNIVORE_REQUIRE_API_KEY=true` to fail closed from the start — recommended for
+anything reachable from a network you do not control, and it also prevents
+deleting the last key from silently reopening the instance.
+
+**Serving over HTTPS.** Set `OMNIVORE_DASHBOARD_URL` to your `https://` URL so
+auth cookies are issued with the `Secure` flag, or set `OMNIVORE_COOKIE_SECURE`
+explicitly. Session cookies are `HttpOnly` and `SameSite=Lax`.
+
+**GitHub tokens.** Session tokens are stored in SQLite in plaintext, so the
+database file is a credential store — restrict its permissions and back it up
+accordingly. Keep `OMNIVORE_GITHUB_SCOPES` as narrow as your use requires;
+adding `repo` grants read *and write* on every private repository the user can
+reach.
 
 ## API Endpoints
 
@@ -42,7 +89,7 @@ POST /api/v1/ingest/coverage
 
 Universal ingestion endpoint. Accepts omnivore JSON, lcov, llvm-cov, Go coverprofile, Python coverage.py, and JaCoCo/Kover XML formats.
 
-**Authentication**: Optional API key via `X-API-Key` header. While no keys exist in the database, the endpoint is open. Once a key is created (Settings page), all uploads require a valid key. Keys can be global or project-scoped.
+**Authentication**: API key via `X-API-Key` header. While no keys exist in the database, the endpoint is open; once a key is created (Settings page), all uploads require a valid key. Set `OMNIVORE_REQUIRE_API_KEY=true` to require one unconditionally. Keys can be global or project-scoped; a project-scoped key may only write to its own project.
 
 **Auto-detection**: The format is detected from the content. Override with `?format=omnivore|lcov|llvm-cov|go|python|kover|jacoco`.
 
@@ -105,6 +152,13 @@ github_repo=owner/repo&pr_number=42&base_branch=main" \
   -H "X-GitHub-Token: ghp_xxxxx" \
   -d @omnivore-report.json
 ```
+
+The `X-GitHub-Token` header is the recommended way to post PR comments: the
+comment is written with the caller's own credentials (in CI, the workflow's
+`GITHUB_TOKEN`). The server's own `GITHUB_TOKEN` is used as a fallback **only**
+when `github_repo` matches the repository the project is linked to — otherwise
+any caller who could reach the ingest endpoint could make the dashboard comment
+on any repository the server's token can write to.
 
 ### Coverage Queries
 
