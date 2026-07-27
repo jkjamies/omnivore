@@ -23,8 +23,13 @@ Thumbs.db
 # Environment
 .env
 
-# Gradle properties (may contain API keys)
-gradle.properties
+# Gradle properties — only the user-level one, which is where credentials go.
+# This pattern used to be unanchored, so it also swallowed every *project's*
+# gradle.properties. That is build configuration, not secrets: the Android test
+# rig needs `android.useAndroidX=true` there, so with the file ignored the rig
+# could not be configured at all from a clean checkout. Nobody noticed because
+# the file existed on the machine that wrote it.
+/gradle.properties
 
 
 # Omnivore coverage artifacts (execution data, probe maps, instrumentation stats)
