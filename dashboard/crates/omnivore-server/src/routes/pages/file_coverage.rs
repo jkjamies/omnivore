@@ -208,8 +208,20 @@ pub async fn file_source_fragment(
             },
             line.number,
             match line.status {
-                LineStatus::Covered => format!(r#"<span class="hit-badge hit-covered">{}x</span>"#, line.hits),
-                LineStatus::Uncovered => r#"<span class="hit-badge hit-uncovered">0x</span>"#.to_string(),
+                // Only show a count when the producer actually tracked one.
+                // The Omnivore agent uses boolean probes, so its "hits" are
+                // always 0 or 1 — rendering "1x" on every covered line implied
+                // an execution count that was never measured. Formats that do
+                // carry real counts (JaCoCo's `ci`) still show them.
+                LineStatus::Covered if line.hits > 1 => {
+                    format!(r#"<span class="hit-badge hit-covered">{}&times;</span>"#, line.hits)
+                }
+                LineStatus::Covered => {
+                    r#"<span class="hit-badge hit-covered" title="covered">&check;</span>"#.to_string()
+                }
+                LineStatus::Uncovered => {
+                    r#"<span class="hit-badge hit-uncovered" title="not covered">&times;</span>"#.to_string()
+                }
                 LineStatus::None => String::new(),
             },
             html_escape(&line.code),

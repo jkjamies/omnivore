@@ -190,6 +190,10 @@ pub fn build_router(db: Database) -> Router {
             routing::get(routes::coverage::get_trend),
         )
         .route(
+            "/api/v1/coverage/{project_id}/series",
+            routing::get(routes::coverage::list_series),
+        )
+        .route(
             "/api/v1/coverage/{project_id}/dependencies",
             routing::get(routes::coverage::get_dependencies),
         )

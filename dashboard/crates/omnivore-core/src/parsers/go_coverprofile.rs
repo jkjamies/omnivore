@@ -124,6 +124,11 @@ pub fn parse(input: &str, meta: &GoCoverprofileMeta) -> Result<(OmnivoreReport, 
             line_rate,
             branch_rate: 0.0, // Go coverprofile doesn't have branch data
             lines,
+            // Zero totals mark "this format carries no branch data", which
+            // keeps these files out of weighted branch rollups entirely rather
+            // than dragging them toward 0%.
+            branches_covered: 0,
+            branches_total: 0,
             source_content: None,
         });
     }

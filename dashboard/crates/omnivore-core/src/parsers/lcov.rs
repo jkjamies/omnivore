@@ -215,6 +215,9 @@ fn flush_file(
             line_rate,
             branch_rate,
             lines: std::mem::take(current_lines),
+            // From this file's BRF/BRH (or its counted BRDA records).
+            branches_covered: file_brh,
+            branches_total: file_brf,
             source_content: None,
         });
     }

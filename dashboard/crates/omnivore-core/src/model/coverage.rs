@@ -117,8 +117,45 @@ pub struct FileCoverage {
     pub line_rate: f64,
     pub branch_rate: f64,
     pub lines: Vec<LineCoverage>,
+    /// Branch edges covered / total for this file.
+    ///
+    /// Required to aggregate branch coverage correctly. Rolling a directory or
+    /// project rate up from per-file `branch_rate` values yields an unweighted
+    /// mean, in which a 3-branch file counts as much as a 300-branch one — see
+    /// [`FileCoverage::branch_totals`].
+    ///
+    /// Defaults to 0 so reports from older producers still deserialize; use
+    /// [`FileCoverage::has_branch_counts`] to tell "no branches" from "producer
+    /// didn't tell us".
+    #[serde(default)]
+    pub branches_covered: i64,
+    #[serde(default)]
+    pub branches_total: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_content: Option<String>,
+}
+
+impl FileCoverage {
+    /// Whether this file carries real branch counts.
+    ///
+    /// A file legitimately without branches and a file from a producer that
+    /// never reported counts both show `branches_total == 0`. They are only
+    /// distinguishable by whether *any* file in the snapshot has counts, which
+    /// is what [`branch_totals`](Self::branch_totals) handles for a collection.
+    pub fn has_branch_counts(&self) -> bool {
+        self.branches_total > 0
+    }
+
+    /// Sum `(covered, total)` branch edges across files.
+    ///
+    /// Returns `None` when no file reports any branches, which means the
+    /// producer predates per-file branch counts — callers should then fall back
+    /// to the snapshot-level totals rather than silently reporting 0%.
+    pub fn branch_totals(files: &[FileCoverage]) -> Option<(i64, i64)> {
+        let covered: i64 = files.iter().map(|f| f.branches_covered).sum();
+        let total: i64 = files.iter().map(|f| f.branches_total).sum();
+        if total > 0 { Some((covered, total)) } else { None }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

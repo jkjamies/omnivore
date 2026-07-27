@@ -106,6 +106,17 @@ pub struct CompositeSnapshot {
     pub file_count: i64,
     pub line_delta: Option<f64>,
     pub branch_delta: Option<f64>,
+    /// True when line totals are a real union across targets rather than a sum.
+    ///
+    /// False means the snapshots had no per-file data to union (retention has
+    /// pruned it), so files covered by more than one target are counted twice
+    /// and the figure overstates coverage breadth.
+    pub lines_are_union: bool,
+    /// Always false today: branch edges are summed, because the report format
+    /// carries per-file branch *totals* but no per-edge identity, so one
+    /// target's edges cannot be matched against another's. Where targets
+    /// overlap, this over-counts.
+    pub branches_are_union: bool,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -242,15 +253,62 @@ fn source_label(source: &str) -> String {
     }
 }
 
+/// Combine several target snapshots into a single "all tests" view.
+///
+/// Coverage targets overlap: the same source file is typically exercised by
+/// both unit and instrumented tests. Summing each target's totals therefore
+/// counts shared files twice and answers the wrong question — it yields a
+/// weighted average of the targets rather than "what did all the tests, taken
+/// together, cover?".
+///
+/// The union is computed from per-line data instead: a line counts as covered
+/// if *any* target hit it, and each distinct file contributes its lines once.
+/// That is the number users read the composite row as meaning.
+///
+/// Branch edges cannot be unioned this way — the report carries per-file totals
+/// but not per-edge identity, so there is no way to tell one target's edge from
+/// another's. They are summed, which is correct only when targets do not
+/// overlap; [`CompositeSnapshot::branches_are_union`] records that so the UI can
+/// mark it.
 pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot> {
     if targets.len() < 2 {
         return None;
     }
-    let lines_covered: i64 = targets.iter().map(|t| t.lines_covered).sum();
-    let lines_total: i64 = targets.iter().map(|t| t.lines_total).sum();
+
+    // path -> line number -> covered by any target
+    let mut union: std::collections::HashMap<&str, std::collections::HashMap<i32, bool>> =
+        std::collections::HashMap::new();
+    for target in targets {
+        for file in &target.files {
+            let lines = union.entry(file.path.as_str()).or_default();
+            for line in &file.lines {
+                let entry = lines.entry(line.line_number).or_insert(false);
+                *entry |= line.hit_count > 0;
+            }
+        }
+    }
+
+    let have_file_data = !union.is_empty();
+    let (lines_covered, lines_total, file_count) = if have_file_data {
+        let total: i64 = union.values().map(|l| l.len() as i64).sum();
+        let covered: i64 = union
+            .values()
+            .map(|l| l.values().filter(|hit| **hit).count() as i64)
+            .sum();
+        (covered, total, union.len() as i64)
+    } else {
+        // Summary-only snapshots (file data pruned by retention) have no lines
+        // to union, so fall back to summing. Over-counting a pruned historical
+        // snapshot is better than showing nothing.
+        (
+            targets.iter().map(|t| t.lines_covered).sum(),
+            targets.iter().map(|t| t.lines_total).sum(),
+            targets.iter().map(|t| t.file_count).sum(),
+        )
+    };
+
     let branches_covered: i64 = targets.iter().map(|t| t.branches_covered).sum();
     let branches_total: i64 = targets.iter().map(|t| t.branches_total).sum();
-    let file_count: i64 = targets.iter().map(|t| t.file_count).sum();
     let line_rate = if lines_total > 0 { lines_covered as f64 / lines_total as f64 } else { 0.0 };
     let branch_rate = if branches_total > 0 { branches_covered as f64 / branches_total as f64 } else { 0.0 };
 
@@ -289,6 +347,8 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
     Some(CompositeSnapshot {
         line_rate, branch_rate, lines_covered, lines_total,
         branches_covered, branches_total, file_count, line_delta, branch_delta,
+        lines_are_union: have_file_data,
+        branches_are_union: false,
     })
 }
 
@@ -383,9 +443,24 @@ fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage], pr
     let covered_lines: i64 = files.iter().map(|f| f.lines.iter().filter(|l| l.hit_count > 0).count() as i64).sum();
     let line_rate = if total_lines > 0 { covered_lines as f64 / total_lines as f64 } else { 0.0 };
 
-    let total_branches: f64 = files.len() as f64;
-    let branch_rate_sum: f64 = files.iter().map(|f| f.branch_rate).sum();
-    let branch_rate = if total_branches > 0.0 { branch_rate_sum / total_branches } else { 0.0 };
+    // Weight branch coverage by the number of branches, not by the number of
+    // files. The previous `sum(branch_rate) / file_count` gave a 3-branch file
+    // the same influence as a 300-branch one, and — because a branchless file
+    // used to report 1.0 — a directory of straight-line code could drag a
+    // genuinely poorly-covered directory up to look healthy.
+    //
+    // Reports produced before per-file branch counts existed carry no totals;
+    // there the unweighted mean is the only thing available, so fall back to it
+    // rather than showing 0%.
+    let branch_covered: i64 = files.iter().map(|f| f.branches_covered).sum();
+    let branch_total: i64 = files.iter().map(|f| f.branches_total).sum();
+    let branch_rate = if branch_total > 0 {
+        branch_covered as f64 / branch_total as f64
+    } else if files.iter().any(|f| f.branch_rate > 0.0) {
+        files.iter().map(|f| f.branch_rate).sum::<f64>() / files.len() as f64
+    } else {
+        0.0
+    };
 
     let line_delta = if children.iter().any(|c| c.line_delta.is_some()) {
         Some(children.iter().filter_map(|c| c.line_delta).sum::<f64>() / children.len() as f64)
@@ -408,5 +483,159 @@ fn build_dir_node(dir_name: &str, parent_path: &str, files: &[&FileCoverage], pr
         file_count: files.len(),
         line_delta,
         branch_delta,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omnivore_core::model::coverage::LineCoverage;
+
+    fn file(path: &str, br_cov: i64, br_tot: i64, lines: &[(i32, i64)]) -> FileCoverage {
+        FileCoverage {
+            path: path.to_string(),
+            line_rate: 0.0,
+            branch_rate: if br_tot > 0 { br_cov as f64 / br_tot as f64 } else { 0.0 },
+            lines: lines
+                .iter()
+                .map(|(n, h)| LineCoverage { line_number: *n, hit_count: *h })
+                .collect(),
+            branches_covered: br_cov,
+            branches_total: br_tot,
+            source_content: None,
+        }
+    }
+
+    /// A directory's branch rate must be covered/total across its files, not
+    /// the mean of their rates — otherwise a 2-branch file counts as much as a
+    /// 200-branch one.
+    #[test]
+    fn directory_branch_rate_is_weighted_by_branch_count() {
+        let files = vec![
+            file("pkg/Tiny.kt", 2, 2, &[(1, 1)]),
+            file("pkg/Big.kt", 0, 200, &[(1, 0)]),
+        ];
+        let tree = build_file_tree(&files, &std::collections::HashMap::new());
+        let dir = tree.iter().find(|n| n.is_dir).expect("expected a pkg/ directory node");
+
+        // Weighted: 2/202 ≈ 0.0099. The unweighted mean would be 0.5.
+        assert!(
+            (dir.branch_rate - 2.0 / 202.0).abs() < 1e-9,
+            "expected weighted branch rate ~0.0099, got {}",
+            dir.branch_rate
+        );
+    }
+
+    /// Files carrying no branch counts fall back to the mean, so reports from
+    /// producers predating per-file counts still render something sensible.
+    #[test]
+    fn directory_branch_rate_falls_back_when_counts_are_absent() {
+        let mut a = file("pkg/A.kt", 0, 0, &[(1, 1)]);
+        let mut b = file("pkg/B.kt", 0, 0, &[(1, 0)]);
+        a.branch_rate = 1.0;
+        b.branch_rate = 0.0;
+
+        let tree = build_file_tree(&vec![a, b], &std::collections::HashMap::new());
+        let dir = tree.iter().find(|n| n.is_dir).unwrap();
+        assert!((dir.branch_rate - 0.5).abs() < 1e-9, "got {}", dir.branch_rate);
+    }
+
+    /// A branchless file must report 0, not 1.0 — "100% of no branches" used to
+    /// inflate every aggregate it appeared in.
+    #[test]
+    fn branchless_files_contribute_zero_not_full_coverage() {
+        let files = vec![file("pkg/Straight.kt", 0, 0, &[(1, 1), (2, 1)])];
+        let tree = build_file_tree(&files, &std::collections::HashMap::new());
+        let node = &tree[0];
+        assert_eq!(node.branch_rate, 0.0);
+    }
+
+    fn target(name: &str, files: Vec<FileCoverage>) -> TargetSnapshot {
+        let file_tree = build_file_tree(&files, &std::collections::HashMap::new());
+        TargetSnapshot {
+            target: name.to_string(),
+            label: name.to_string(),
+            source: "omnivore-agent".to_string(),
+            source_label: String::new(),
+            line_rate: 0.0,
+            branch_rate: 0.0,
+            lines_covered: files
+                .iter()
+                .map(|f| f.lines.iter().filter(|l| l.hit_count > 0).count() as i64)
+                .sum(),
+            lines_total: files.iter().map(|f| f.lines.len() as i64).sum(),
+            branches_covered: files.iter().map(|f| f.branches_covered).sum(),
+            branches_total: files.iter().map(|f| f.branches_total).sum(),
+            file_count: files.len() as i64,
+            files,
+            file_tree,
+            trend: vec![],
+            line_delta: None,
+            branch_delta: None,
+        }
+    }
+
+    /// The same file exercised by two targets must be counted once.
+    #[test]
+    fn composite_unions_shared_files() {
+        let unit = target(
+            "JVM_UNIT",
+            vec![file("pkg/Shared.kt", 0, 0, &[(1, 1), (2, 0), (3, 0), (4, 0)])],
+        );
+        let instrumented = target(
+            "ANDROID_INSTRUMENTED",
+            vec![file("pkg/Shared.kt", 0, 0, &[(1, 0), (2, 1), (3, 0), (4, 0)])],
+        );
+
+        let composite = compute_composite(&[unit, instrumented]).expect("two targets");
+
+        assert_eq!(composite.lines_total, 4, "the file has 4 lines, not 8");
+        assert_eq!(composite.lines_covered, 2, "lines 1 and 2 were covered between them");
+        assert_eq!(composite.file_count, 1, "one distinct file");
+        assert!(composite.lines_are_union);
+    }
+
+    /// Distinct files across targets still add up.
+    #[test]
+    fn composite_sums_distinct_files() {
+        let unit = target("JVM_UNIT", vec![file("pkg/A.kt", 0, 0, &[(1, 1), (2, 1)])]);
+        let instrumented =
+            target("ANDROID_INSTRUMENTED", vec![file("pkg/B.kt", 0, 0, &[(1, 1), (2, 0)])]);
+
+        let composite = compute_composite(&[unit, instrumented]).unwrap();
+        assert_eq!(composite.lines_total, 4);
+        assert_eq!(composite.lines_covered, 3);
+        assert_eq!(composite.file_count, 2);
+    }
+
+    /// With file data pruned by retention there is nothing to union, so fall
+    /// back to summing rather than reporting nothing.
+    #[test]
+    fn composite_falls_back_to_sums_without_file_data() {
+        let mut a = target("JVM_UNIT", vec![]);
+        let mut b = target("ANDROID_INSTRUMENTED", vec![]);
+        a.lines_total = 10;
+        a.lines_covered = 5;
+        b.lines_total = 20;
+        b.lines_covered = 10;
+
+        let composite = compute_composite(&[a, b]).unwrap();
+        assert_eq!(composite.lines_total, 30);
+        assert_eq!(composite.lines_covered, 15);
+        assert!(!composite.lines_are_union, "should be flagged as a sum, not a union");
+    }
+
+    #[test]
+    fn html_escape_covers_both_quote_styles() {
+        assert_eq!(html_escape(r#"a'b"c"#), "a&#39;b&quot;c");
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+    }
+
+    #[test]
+    fn json_for_script_cannot_close_a_script_element() {
+        let value = serde_json::json!({"name": "</script><script>alert(1)</script>"});
+        let encoded = json_for_script(&value, "{}");
+        assert!(!encoded.contains("</script"), "encoded: {encoded}");
+        assert!(encoded.contains("\\u003c"));
     }
 }
