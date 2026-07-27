@@ -15,6 +15,7 @@ dependencies {
     compileOnly(libs.kotlin.gradle.plugin)
 
     testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 gradlePlugin {

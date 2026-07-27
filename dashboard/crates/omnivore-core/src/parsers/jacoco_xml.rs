@@ -154,6 +154,11 @@ pub fn parse(
                 line_rate,
                 branch_rate,
                 lines,
+                // Already computed above from each line's cb/mb; it used to be
+                // collapsed into branch_rate and thrown away, which left the
+                // dashboard unable to weight directory rollups by branch count.
+                branches_covered: file_branches_covered,
+                branches_total: file_branches_total,
                 source_content: None,
             });
         }
@@ -196,7 +201,7 @@ pub fn parse(
         }
     });
 
-    let report_out = OmnivoreReport {
+    let mut report_out = OmnivoreReport {
         version: "0.1.0".into(),
         format: "jacoco-xml".into(),
         dependencies: None,
@@ -219,7 +224,7 @@ pub fn parse(
         files,
     };
 
-    let snapshot = CoverageSnapshot::from_report(&report_out, Some(source));
+    let snapshot = CoverageSnapshot::from_report(&mut report_out, Some(source));
     Ok((report_out, snapshot))
 }
 

@@ -30,11 +30,16 @@ Each sub-project has its own `CLAUDE.md` with detailed architecture, build comma
 ### Build Everything
 
 ```sh
-# Plugin (Gradle 8.12, Kotlin 2.1.10, Java 17)
+# Plugin (Gradle 9.4.1, Kotlin 2.3.21, Java 17 toolchain)
 cd coverage-plugin && ./gradlew build
 
-# Dashboard (Rust 2024 edition — DATABASE_URL required for sqlx compile-time checks)
-cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
+# Dashboard (Rust 2024 edition)
+# sqlx checks every query at COMPILE time against a real database, so the
+# tables must exist before `cargo build` — create them from the shared schema.
+# Do not try to "run the server once" first; it cannot be built without this.
+cd dashboard \
+  && sqlite3 omnivore.db < crates/omnivore-core/schema.sql \
+  && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo build
 
 # KMP test rig (requires plugin build first — uses composite build)
 cd test-rigs/kmp-test-rig && ./gradlew test omnivoreReport
@@ -62,7 +67,7 @@ cd coverage-plugin && ./gradlew test
 cd coverage-plugin && ./gradlew :omnivore-agent-tests:test --tests ComposeDetectorTest
 cd coverage-plugin && ./gradlew :omnivore-agent-tests:test --tests "*.ComposeDetectorTest.testMethodName"
 
-# Dashboard — all tests
+# Dashboard — all tests (needs the schema applied, as above)
 cd dashboard && DATABASE_URL="sqlite:omnivore.db?mode=rwc" cargo test
 
 # Dashboard — single test
@@ -123,11 +128,33 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=jacoco&project
 - Version: `0.1.0-SNAPSHOT` (plugin), `0.1.0` (dashboard)
 - Gradle plugin ID: `io.github.jkjamies.omnivore`
 - Group ID: `io.github.jkjamies`
-- Report format: `omnivore-report.json` — camelCase fields, kotlinx-serialization (Kotlin) ↔ serde (Rust)
+- Report format: `omnivore-report.json` — camelCase fields, kotlinx-serialization (Kotlin) ↔ serde (Rust). The two definitions must stay in sync; see `schema/CLAUDE.md`.
 - Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`, `RUST_LLVM_COV`, `GO_COVER`, `PYTHON_COVERAGE`, `LCOV`
+- **Target vs. source:** `target` is *where* code ran, `source` is *which tool* measured it (`omnivore-agent`, `kover`, `jacoco`, …). The `(target, source)` pair is the "series" the dashboard trends, prunes, and reports on — never treat "the project's latest snapshot" as meaningful when several series exist.
 
 ## CI/CD
 
+- **`dashboard.yml`** — dashboard changes: build, test, `docker build`, and a health smoke test
+- **`plugin.yml`** — plugin changes: Gradle build + agent/plugin unit tests
 - **`coverage.yml`** — push to `main` + PRs: build kmp-test-rig, generate report, upload to dashboard
+- **`android.yml`** — plugin or android-test-rig changes: runs the AGP build-time transform under real AGP (no emulator) and fails if it produced no probe map. This is the only job that executes `OmnivoreClassVisitorFactory`; `plugin.yml` merely compiles it.
 - **`publish.yml`** — `v*` tags: publish agent + plugin to Maven Central (OSSRH) + Gradle Plugin Portal
 - See `coverage-plugin/PUBLISHING-REQUIRED.md` for one-time setup checklist
+
+`dashboard.yml` runs `cargo fmt`/`clippy` as advisory (`continue-on-error`) because the tree predates any such gate; `cargo test` and the Docker build gate. Run `cargo fmt --all` once, then make both hard failures.
+
+## Reviewing this codebase
+
+`docs/CODEBASE-REVIEW.md` is the standing record of known defects, why they
+mattered, and what was done about them. Read it before changing coverage
+computation, authorization, or the probe format — several non-obvious
+invariants are documented there and nowhere else.
+
+Two invariants worth knowing before touching anything:
+
+- **Probe indices are positional.** `ClassInstrumenter.walkProbes` must emit
+  probes in exactly the order `ProbeInserter` inserts them, or coverage lands
+  on the wrong source lines with no error anywhere.
+- **Both access controls default to open.** GitHub OAuth gates reading, API
+  keys gate writing, and they are independent. The server logs its effective
+  posture at startup.

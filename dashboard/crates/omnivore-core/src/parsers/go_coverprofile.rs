@@ -1,8 +1,15 @@
 use crate::model::coverage::{
     source, CoverageSummary, CoverageSnapshot, CoverageTarget, FileCoverage, LineCoverage,
-    OmnivoreReport, ProjectInfo,
+    OmnivoreReport, ProjectInfo, MAX_LINE_NUMBER,
 };
 use crate::parsers::{IngestMeta, ParseError};
+
+/// Ceiling on the total number of covered lines one profile may expand to.
+///
+/// Bounds the aggregate the way `MAX_LINE_NUMBER` bounds a single block: many
+/// individually plausible blocks still add up. Comfortably above any real Go
+/// codebase — the Go standard library is well under a million lines.
+const MAX_TOTAL_LINES: usize = 2_000_000;
 
 /// Metadata not present in Go coverprofile — must be supplied externally.
 pub type GoCoverprofileMeta = IngestMeta;
@@ -24,6 +31,7 @@ pub fn parse(input: &str, meta: &GoCoverprofileMeta) -> Result<(OmnivoreReport, 
         std::collections::HashMap::new();
 
     let mut has_mode_line = false;
+    let mut total_expanded: usize = 0;
 
     for raw_line in input.lines() {
         let line = raw_line.trim();
@@ -61,6 +69,32 @@ pub fn parse(input: &str, meta: &GoCoverprofileMeta) -> Result<(OmnivoreReport, 
         }
         let start_line = parse_line_num(range_parts[0]);
         let end_line = parse_line_num(range_parts[1]);
+
+        // Go is the one format where a record *expands*: a block is a line
+        // range, and every line in it becomes a coverage record. That makes the
+        // output size unbounded in the input value rather than the input size —
+        // `a.go:1.0,2000000000.0 1 1` is 33 bytes and asks for two billion
+        // entries. Ingest is unauthenticated by default, so a request that fits
+        // in a tweet could exhaust the server's memory; measured before this
+        // bound, an end line of 5,000,000 already cost 18 seconds and hundreds
+        // of megabytes.
+        //
+        // Reject rather than clamp. A block claiming to span more lines than any
+        // real file has is not a report we can salvage, and silently truncating
+        // it would report coverage the profile never described.
+        if start_line < 1 || end_line < start_line || end_line > MAX_LINE_NUMBER {
+            return Err(ParseError::GoCoverprofile(format!(
+                "Block range {start_line}..{end_line} is not a plausible source line range \
+                 (line numbers must be 1..={MAX_LINE_NUMBER})"
+            )));
+        }
+
+        total_expanded += (end_line - start_line + 1) as usize;
+        if total_expanded > MAX_TOTAL_LINES {
+            return Err(ParseError::GoCoverprofile(format!(
+                "Profile expands to more than {MAX_TOTAL_LINES} covered lines"
+            )));
+        }
 
         let file_lines = files.entry(file_name.to_string()).or_default();
         for ln in start_line..=end_line {
@@ -124,6 +158,11 @@ pub fn parse(input: &str, meta: &GoCoverprofileMeta) -> Result<(OmnivoreReport, 
             line_rate,
             branch_rate: 0.0, // Go coverprofile doesn't have branch data
             lines,
+            // Zero totals mark "this format carries no branch data", which
+            // keeps these files out of weighted branch rollups entirely rather
+            // than dragging them toward 0%.
+            branches_covered: 0,
+            branches_total: 0,
             source_content: None,
         });
     }
@@ -137,7 +176,7 @@ pub fn parse(input: &str, meta: &GoCoverprofileMeta) -> Result<(OmnivoreReport, 
     let project_id = meta.project_id.clone().unwrap_or_else(|| "go-project".into());
     let project_name = meta.project_name.clone().unwrap_or_else(|| "go import".into());
 
-    let report = OmnivoreReport {
+    let mut report = OmnivoreReport {
         version: "0.1.0".into(),
         format: "go-coverprofile".into(),
         dependencies: None,
@@ -160,7 +199,7 @@ pub fn parse(input: &str, meta: &GoCoverprofileMeta) -> Result<(OmnivoreReport, 
         files: file_coverages,
     };
 
-    let snapshot = CoverageSnapshot::from_report(&report, Some(source::GO));
+    let snapshot = CoverageSnapshot::from_report(&mut report, Some(source::GO));
     Ok((report, snapshot))
 }
 
@@ -197,6 +236,52 @@ fn find_common_prefix(files: &std::collections::HashMap<String, std::collections
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Go block is a line *range*, so output size scales with the numbers in
+    /// the input rather than its length. Without a bound, 33 bytes asks for two
+    /// billion entries — on an endpoint that is unauthenticated by default.
+    #[test]
+    fn rejects_a_block_range_no_real_file_could_have() {
+        let meta = IngestMeta::default();
+        let input = "mode: set\na.go:1.0,2000000000.0 1 1\n";
+        let err = parse(input, &meta).unwrap_err();
+        assert!(
+            err.to_string().contains("plausible source line range"),
+            "expected a range rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_inverted_and_zero_ranges() {
+        let meta = IngestMeta::default();
+        for bad in ["a.go:9.0,2.0 1 1", "a.go:0.0,5.0 1 1", "a.go:-3.0,5.0 1 1"] {
+            let input = format!("mode: set\n{bad}\n");
+            assert!(parse(&input, &meta).is_err(), "should reject: {bad}");
+        }
+    }
+
+    /// Individually plausible blocks still add up, so the aggregate is bounded
+    /// too.
+    #[test]
+    fn rejects_a_profile_that_expands_past_the_total_ceiling() {
+        let meta = IngestMeta::default();
+        let mut input = String::from("mode: set\n");
+        for i in 0..3 {
+            input.push_str(&format!("f{i}.go:1.0,{MAX_LINE_NUMBER}.0 1 1\n"));
+        }
+        let err = parse(&input, &meta).unwrap_err();
+        assert!(
+            err.to_string().contains("expands to more than"),
+            "expected a total-size rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn still_accepts_an_ordinary_profile() {
+        let meta = IngestMeta::default();
+        let (report, _) = parse("mode: set\na.go:10.2,14.3 2 5\n", &meta).unwrap();
+        assert_eq!(report.files[0].lines.len(), 5);
+    }
 
     const SAMPLE_COVERPROFILE: &str = "\
 mode: count

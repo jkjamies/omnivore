@@ -85,6 +85,12 @@ pub async fn export_report(
         &baseline_snapshots,
     );
 
+    // project_id is interpolated into a Content-Disposition filename. A quote
+    // or control character there produces a malformed header (axum then drops
+    // the response entirely), so reduce it to characters that are safe in a
+    // filename.
+    let safe_id = sanitize_filename(&project_id);
+
     let format = params.format.as_deref().unwrap_or("md");
     match format {
         "json" => {
@@ -96,7 +102,7 @@ pub async fn export_report(
                         header::CONTENT_DISPOSITION,
                         &format!(
                             "attachment; filename=\"omnivore-report-{}.json\"",
-                            project_id
+                            safe_id
                         ),
                     ),
                 ],
@@ -113,7 +119,7 @@ pub async fn export_report(
                         header::CONTENT_DISPOSITION,
                         &format!(
                             "attachment; filename=\"omnivore-report-{}.md\"",
-                            project_id
+                            safe_id
                         ),
                     ),
                 ],
@@ -121,5 +127,28 @@ pub async fn export_report(
             )
                 .into_response())
         }
+    }
+}
+
+/// Reduce a project ID to characters safe inside a quoted `filename=` value.
+///
+/// Project IDs come from uploaded reports, so they can contain quotes, spaces,
+/// or control characters — all of which corrupt the header.
+fn sanitize_filename(id: &str) -> String {
+    let cleaned: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(100)
+        .collect();
+    if cleaned.trim_matches('-').is_empty() {
+        "project".to_string()
+    } else {
+        cleaned
     }
 }

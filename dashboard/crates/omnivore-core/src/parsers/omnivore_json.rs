@@ -6,8 +6,8 @@ use crate::parsers::ParseError;
 /// Provenance comes from the report's own `project.source` (falling back to the
 /// Omnivore agent), so native reports keep their declared source.
 pub fn parse(json: &str) -> Result<(OmnivoreReport, CoverageSnapshot), ParseError> {
-    let report: OmnivoreReport = serde_json::from_str(json)?;
-    let snapshot = CoverageSnapshot::from_report(&report, None);
+    let mut report: OmnivoreReport = serde_json::from_str(json)?;
+    let snapshot = CoverageSnapshot::from_report(&mut report, None);
     Ok((report, snapshot))
 }
 

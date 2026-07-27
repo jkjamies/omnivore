@@ -12,6 +12,7 @@
 </div>
 
 <form method="post" action="/settings">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
 <div class="card">
   <div class="card-header">
@@ -125,6 +126,7 @@
           <td>{{ self.fmt_key_last_used(key) }}</td>
           <td>
             <form method="post" action="/settings/api-keys/{{ key.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete API key &quot;{{ key.name }}&quot;?')">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="btn btn-danger btn-sm">Delete</button>
             </form>
           </td>
@@ -135,6 +137,7 @@
   {% endif %}
 
   <form method="post" action="/settings/api-keys" class="api-key-create-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="text" name="name" placeholder="Key name (e.g., CI Pipeline)" required>
     <button type="submit" class="btn">Create Key</button>
   </form>

@@ -48,33 +48,26 @@ pub struct IngestParams {
 /// The GitHub token can be provided via `X-GitHub-Token` header or the server's `GITHUB_TOKEN` env var.
 pub async fn ingest_coverage(
     State(db): State<Database>,
+    // Read the peer address out of extensions rather than extracting
+    // ConnectInfo directly: it is only populated when the server runs with
+    // `into_make_service_with_connect_info`, and requiring it would make the
+    // handler unusable from tests that drive the router directly.
+    extensions: axum::http::Extensions,
     headers: axum::http::HeaderMap,
     Query(params): Query<IngestParams>,
     body: String,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
-    // API key authentication (backwards-compatible: skip if no keys exist)
-    let has_keys = db.any_api_keys_exist().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}"))
-    })?;
+    // Bound how fast a single client can create projects and snapshots. In open
+    // mode this endpoint is unauthenticated, so without a limit it is unbounded
+    // row creation from anyone who can reach the port.
+    let peer_ip = extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|axum::extract::ConnectInfo(addr)| addr.ip());
+    crate::routes::rate_limit::check(&crate::routes::rate_limit::client_key(
+        &headers, peer_ip,
+    ))?;
 
-    let validated_key = if has_keys {
-        let raw_key = headers
-            .get("X-API-Key")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                (StatusCode::UNAUTHORIZED, "Missing X-API-Key header".to_string())
-            })?;
-
-        let api_key = db.validate_api_key(raw_key).await.map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}"))
-        })?;
-
-        Some(api_key.ok_or_else(|| {
-            (StatusCode::UNAUTHORIZED, "Invalid API key".to_string())
-        })?)
-    } else {
-        None
-    };
+    let validated_key = crate::routes::api_auth::authenticate_write(&db, &headers).await?;
 
     let format = match &params.format {
         Some(f) => CoverageFormat::from_str_loose(f)
@@ -129,27 +122,21 @@ pub async fn ingest_coverage(
     };
 
     // Project-scoped key: verify it matches the project being uploaded to
-    if let Some(ref key) = validated_key {
-        if let Some(ref key_project_id) = key.project_id {
-            if key_project_id != &snapshot.project_id {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    format!(
-                        "API key is scoped to project '{}', cannot upload to '{}'",
-                        key_project_id, snapshot.project_id
-                    ),
-                ));
-            }
-        }
-    }
+    crate::routes::api_auth::enforce_project_scope(
+        validated_key.as_ref(),
+        &snapshot.project_id,
+    )?;
 
     let project_name = report.project.name.clone();
     let ratchet = db.ingest_snapshot(&snapshot, Some(&project_name))
         .await
         .map_err(|e| {
+            // Don't hand raw sqlx errors (schema, paths, constraint names) to
+            // an unauthenticated caller.
+            tracing::error!(error = %e, project_id = %snapshot.project_id, "Snapshot ingest failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Storage error: {e}"),
+                "Failed to store coverage snapshot".to_string(),
             )
         })?;
 
@@ -173,12 +160,45 @@ pub async fn ingest_coverage(
 
     // Post PR comment if GitHub params are provided
     if let (Some(repo), Some(pr_number)) = (&params.github_repo, params.pr_number) {
-        // Token from header takes priority, then server env var
-        let github_token = headers
+        // The caller names both the repo and the PR number, and the server may
+        // hold a GITHUB_TOKEN with write access to many repositories. Without a
+        // check, anyone able to reach ingest could make the dashboard post
+        // arbitrary comments anywhere that token reaches, under the operator's
+        // identity. So:
+        //   * the slug must be well-formed, and
+        //   * the server's own token is only used when the repo matches what
+        //     the project is configured with. A caller supplying their own
+        //     X-GitHub-Token is spending their own authority and is fine.
+        let caller_token = headers
             .get("X-GitHub-Token")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| std::env::var("GITHUB_TOKEN").ok());
+            .map(|s| s.to_string());
+
+        let github_token = if !omnivore_core::validation::is_valid_repo_slug(repo) {
+            tracing::warn!(%repo, "Refusing PR comment: malformed repository slug");
+            None
+        } else if caller_token.is_some() {
+            caller_token
+        } else {
+            let linked_repo = db
+                .get_project(&snapshot.project_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|p| p.github_repo);
+
+            match linked_repo {
+                Some(ref linked) if linked == repo => std::env::var("GITHUB_TOKEN").ok(),
+                _ => {
+                    tracing::warn!(
+                        %repo,
+                        project_id = %snapshot.project_id,
+                        "Refusing to use the server GITHUB_TOKEN for a repo the project is not linked to"
+                    );
+                    None
+                }
+            }
+        };
 
         if let Some(token) = github_token {
             let base_branch = params.base_branch.as_deref().unwrap_or("main");
@@ -199,7 +219,10 @@ pub async fn ingest_coverage(
                 tracing::warn!("Failed to post PR comment to {repo}#{pr_number}: {e}");
             }
         } else {
-            tracing::warn!("PR comment requested but GITHUB_TOKEN not set");
+            tracing::warn!(
+                "PR comment requested but no usable token — pass X-GitHub-Token, \
+                 or link the project to {repo} and set GITHUB_TOKEN on the server"
+            );
         }
     }
 
@@ -227,12 +250,80 @@ pub struct IngestResponse {
     pub warnings: Vec<String>,
 }
 
+/// Selects one `(target, source)` coverage series.
+///
+/// A project routinely holds several series at once — unit and instrumented
+/// tests, or the same target measured by both the Omnivore agent and Kover.
+/// Without a selector these endpoints answered "the most recently written row",
+/// which alternates between series as CI runs and makes a trend line into a
+/// sawtooth between two unrelated measurements. The HTML pages have always
+/// iterated series properly; this brings the JSON API in line.
+#[derive(Deserialize, Default)]
+pub struct SeriesParams {
+    /// Execution environment, e.g. `JVM_UNIT`.
+    pub target: Option<String>,
+    /// Producing tool, e.g. `kover`.
+    pub source: Option<String>,
+}
+
+impl SeriesParams {
+    fn target(&self) -> Option<&str> {
+        self.target.as_deref().filter(|s| !s.is_empty())
+    }
+    fn source(&self) -> Option<&str> {
+        self.source.as_deref().filter(|s| !s.is_empty())
+    }
+}
+
+/// Resolve the series to serve when the caller did not fully specify one.
+///
+/// Picking the newest row would silently alternate between series, so instead
+/// fall back to the project's single series when there is exactly one, and ask
+/// the caller to choose when there is more than one. Being explicit beats
+/// returning a plausible-looking number from an arbitrary series.
+async fn resolve_series(
+    db: &Database,
+    project_id: &str,
+    params: &SeriesParams,
+) -> Result<(String, String), StatusCode> {
+    let series = db
+        .get_series_for_project(project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if series.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let matches: Vec<&(String, String)> = series
+        .iter()
+        .filter(|(t, s)| {
+            params.target().is_none_or(|want| want.eq_ignore_ascii_case(t))
+                && params.source().is_none_or(|want| want.eq_ignore_ascii_case(s))
+        })
+        .collect();
+
+    match matches.as_slice() {
+        [] => Err(StatusCode::NOT_FOUND),
+        [only] => Ok((only.0.clone(), only.1.clone())),
+        // Ambiguous. 300 tells the caller their request matched more than one
+        // series and they must narrow it, rather than handing back one at random.
+        _ => Err(StatusCode::MULTIPLE_CHOICES),
+    }
+}
+
 /// Get the latest coverage snapshot for a project.
+///
+/// Accepts `?target=` and `?source=` to select a series. With a single series
+/// the parameters are optional; with several, one must be given.
 pub async fn get_latest(
     State(db): State<Database>,
     Path(project_id): Path<String>,
+    Query(params): Query<SeriesParams>,
 ) -> Result<Json<CoverageSnapshot>, StatusCode> {
-    db.get_latest_snapshot(&project_id)
+    let (target, source) = resolve_series(&db, &project_id, &params).await?;
+
+    db.get_latest_snapshot_by_series(&project_id, &target, &source)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
@@ -245,9 +336,11 @@ pub async fn get_trend(
     Path(project_id): Path<String>,
     Query(params): Query<TrendParams>,
 ) -> Result<Json<Vec<TrendPoint>>, StatusCode> {
-    let limit = params.limit.unwrap_or(30);
+    let limit = params.limit.unwrap_or(30).clamp(1, 1000);
+    let (target, source) = resolve_series(&db, &project_id, &params.series).await?;
+
     let snapshots = db
-        .get_snapshots_for_project(&project_id, limit)
+        .get_snapshots_for_project_by_series(&project_id, &target, &source, limit)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -257,6 +350,7 @@ pub async fn get_trend(
             commit_sha: s.commit_sha,
             branch: s.branch,
             target: s.target,
+            source: s.source,
             line_rate: s.line_rate,
             branch_rate: s.branch_rate,
             lines_covered: s.lines_covered,
@@ -271,6 +365,33 @@ pub async fn get_trend(
 #[derive(Deserialize)]
 pub struct TrendParams {
     pub limit: Option<i64>,
+    #[serde(flatten)]
+    pub series: SeriesParams,
+}
+
+/// List the `(target, source)` series a project has, so a caller hitting a
+/// `300 Multiple Choices` from the endpoints above can pick one.
+pub async fn list_series(
+    State(db): State<Database>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Vec<SeriesInfo>>, StatusCode> {
+    let series = db
+        .get_series_for_project(&project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(
+        series
+            .into_iter()
+            .map(|(target, source)| SeriesInfo { target, source })
+            .collect(),
+    ))
+}
+
+#[derive(Serialize)]
+pub struct SeriesInfo {
+    pub target: String,
+    pub source: String,
 }
 
 #[derive(Serialize)]
@@ -278,6 +399,7 @@ pub struct TrendPoint {
     pub commit_sha: Option<String>,
     pub branch: Option<String>,
     pub target: String,
+    pub source: String,
     pub line_rate: f64,
     pub branch_rate: f64,
     pub lines_covered: i64,

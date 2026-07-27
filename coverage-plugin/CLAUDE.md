@@ -21,12 +21,12 @@ omnivore-agent-tests/    Integration tests for the agent
 
 | Dependency | Version | Purpose |
 |---|---|---|
-| ASM | 9.7.1 | Bytecode analysis & transformation (core, tree, commons, util) |
-| kotlinx-serialization | 1.8.0 | JSON report generation |
+| ASM | 9.9.1 | Bytecode analysis & transformation (core, tree, commons, util) |
+| kotlinx-serialization | 1.11.0 | JSON report generation |
 | AGP | 8.8.2 | Android Gradle Plugin integration (compileOnly) |
-| Kotlin | 2.1.10 | Language version |
+| Kotlin | 2.3.21 | Language version |
 | JUnit 4 | 4.13.2 | `RunListener` for Android instrumented tests (compileOnly in agent) |
-| JUnit 5 | 5.11.4 | Testing |
+| JUnit 5 | 6.0.3 | Testing |
 | Java toolchain | 17 | Target JVM |
 
 Version catalog: `gradle/libs.versions.toml`
@@ -50,8 +50,40 @@ Version catalog: `gradle/libs.versions.toml`
 **Probe system:**
 - Each class gets a static `$omnivoreProbes: BooleanArray` field
 - `<clinit>` calls `OmnivoreRuntime.getProbes(classId, className, probeCount)`
-- `ProbeInserter` sets `probes[index] = true` at line/branch points
 - `ExecutionDataStore` holds all probe arrays (thread-safe, concurrent)
+- Class IDs are CRC64 of the class *name* (`ClassId`) — not the bytecode as
+  JaCoCo uses, because the ID is baked into the instrumented `<clinit>` and the
+  AGP path never sees the original bytes
+
+**Probe placement — branch probes are on control-flow EDGES, not on the branch
+instruction.** A probe in front of a conditional jump fires when the condition is
+*evaluated*, which says nothing about which way control went; that made
+`if (x) a() else b()` report 100% branch coverage from a test taking only the
+`true` path. Each conditional jump is rewritten to route both outcomes through
+their own probe block, and each switch arm (plus `default`) gets a probe.
+
+**The invariant that matters:** probe indices are positional, so
+`ClassInstrumenter.walkProbes` must stay in lockstep with `ProbeInserter`'s
+emission order. If they diverge, coverage is attributed to the wrong source lines
+with no error anywhere. Counting, probe-map building, and instrumentation all go
+through that one traversal for exactly this reason — and both the JVM agent and
+the AGP transform share it (`ClassInstrumenter` / `InstrumentingClassVisitor`),
+rather than keeping the parallel implementations that had already drifted apart.
+
+**Two entry points, one core.** `OmnivoreClassTransformer` (load time, JVM agent)
+and `BuildTimeInstrumentingVisitor` (build time, AGP) both live in
+`omnivore-agent` and both funnel into `ClassInstrumenter`. The build-time one
+buffers the class into an ASM `ClassNode` because AGP hands the transform a
+streaming visitor and probe-array sizing needs a total that is not known until
+every method has been seen. `BuildTimeInstrumentationTest` asserts the two paths
+emit **identical probe maps** for the same input; if that test ever fails,
+Android and JVM coverage disagree about what a probe index means, which is the
+failure mode that produces plausible wrong numbers rather than an error.
+
+**Diagnostics:** `InstrumentationStats` counts why classes were or weren't
+instrumented; the agent writes a `.stats` file next to the `.omnivore` data and
+`omnivoreReport` prints a summary line. A class can drop out of coverage for
+several unrelated reasons, all of which were previously a silent `return null`.
 
 **Shutdown:** `ShutdownHook` flushes `.omnivore` + `.probes` files on JVM exit.
 
@@ -95,7 +127,7 @@ omnivore {
 
 **OmnivoreTestListener** (`com.jkjamies.omnivore.agent.android`): JUnit 4 `RunListener` that initializes the agent on `testRunStarted` and flushes `.omnivore`/`.probes` files on `testRunFinished`. Outputs coverage data as base64 via System.err (logcat) with marker lines — this bypasses Android SELinux restrictions on `/data/local/tmp/` and survives AGP's post-test app uninstallation.
 
-**OmnivoreClassVisitorFactory** (`com.jkjamies.omnivore.gradle.transform`): AGP `AsmClassVisitorFactory` that applies probe instrumentation at build time (Android has no `-javaagent` support).
+**OmnivoreClassVisitorFactory** (`com.jkjamies.omnivore.gradle.transform`): AGP `AsmClassVisitorFactory` that applies probe instrumentation at build time (Android has no `-javaagent` support). It is deliberately thin — filtering plus a delegation to `BuildTimeInstrumentingVisitor` in the **agent** module. The instrumentation logic lives there because this module is `compileOnly` against AGP, so anything defined here can only be tested with a full Android toolchain; that is precisely how the build-time path drifted from the agent's in the first place. See `BuildTimeInstrumentationTest`, which holds the two paths to the same probe map for the same input class, and the `android.yml` workflow, which runs the transform under real AGP.
 
 **OmnivoreReportTask:** Scans `build/omnivore/` for `.omnivore` + `.probes` files (from both unit and instrumented tests), analyzes each target (`JVM_UNIT`, `ANDROID_INSTRUMENTED`) independently, and writes one `omnivore-report.json` per target to `build/reports/omnivore/` — top-level for a single target, or under a target-named subdirectory (`jvm-unit/`, `android-instrumented/`) when multiple targets are present, so each uploads as its own dashboard series. Local `index.html`/`coverage.md` use a merged combined view.
 
@@ -118,7 +150,16 @@ omnivore {
 
 **`.omnivore` (execution data):** Magic `OMNIVORE` (8 bytes) + version (short) + class entries (classId: long, className: UTF, probes: bit-packed booleans).
 
-**`.probes` (probe maps):** Magic `OMNIPROB` (8 bytes) + version (short) + class entries with probe metadata (index, line, method, descriptor, type: LINE/BRANCH).
+**`.probes` (probe maps):** Magic `OMNIPROB` (8 bytes) + version (short) + class entries with probe metadata (index, line, method, descriptor, type: LINE/BRANCH, isComposable, branchGroup).
+
+Format **v3**. v1/v2 files are rejected rather than upgraded: branch probes moved
+onto control-flow edges, so probe indices mean something different and pairing an
+old `.probes` with new execution data would silently attribute coverage to the
+wrong lines. `branchGroup` identifies which decision point an edge belongs to, so
+two edges of one `if` are distinguishable from two unrelated branches.
+
+**`.stats` (instrumentation summary):** Java `Properties` — instrumented count,
+per-reason skip counts, and up to 20 failure messages.
 
 ## Publishing
 

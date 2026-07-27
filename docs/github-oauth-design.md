@@ -22,9 +22,20 @@ If `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are not configured, the dashboa
 
 ### OAuth Scopes
 
+Configured via `OMNIVORE_GITHUB_SCOPES`; default `read:user,read:org`.
+
 - `read:user` — user profile (username, avatar)
 - `read:org` — org membership check (only if `OMNIVORE_GITHUB_ORG` is set)
-- `repo` — repo permission checks and source code fetching (covers private repos)
+- `repo` — **not requested by default.** Needed only for permission checks and
+  source fetching on *private* repositories. It grants full read **and write**
+  on every private repo the user can reach, and the token is stored server-side
+  for the life of the session, so it is opt-in:
+  `OMNIVORE_GITHUB_SCOPES=read:user,read:org,repo`.
+
+The login flow includes a `state` parameter, stored in a short-lived `HttpOnly`
+cookie and verified in constant time at the callback before the code is
+exchanged. Without it, an attacker can hand a victim's browser their own
+authorization code and silently log the victim into the attacker's account.
 
 ## Session Storage
 
@@ -42,8 +53,17 @@ sessions (
 ```
 
 - Session ID is a cryptographically random token (not a JWT)
-- Cookie: `HttpOnly`, `SameSite=Lax`, `Secure` (in production)
+- Cookie: `HttpOnly`, `SameSite=Lax`, and `Secure` when
+  `OMNIVORE_DASHBOARD_URL` is `https://` or `OMNIVORE_COOKIE_SECURE=true`.
+  `Secure` cannot simply be hardcoded on: the cookie would never be sent over
+  plain HTTP, breaking login for `http://localhost:3000`.
 - Expired sessions pruned on each login or periodically
+
+> `github_token` is stored **in plaintext**, so `omnivore.db` is a credential
+> store: read access to the file (a backup, a stray volume mount) yields working
+> GitHub tokens for every logged-in user. This is the main reason the default
+> scope set excludes `repo`. Encrypting the column is tracked in
+> `docs/CODEBASE-REVIEW.md` §2.9.
 
 ## Project-Level Permissions
 
@@ -51,14 +71,23 @@ Permissions are derived from the user's access to the project's linked `github_r
 
 | GitHub Repo Permission | View Project & Trends | Settings / Keys / Delete | Export | File Source Code |
 |---|---|---|---|---|
-| `admin` / `maintain` | Yes | Yes | Yes | Yes |
-| `write` / `read` | Yes | No | Yes | Yes |
-| `none` / no access | Yes | No | No | No |
+| `admin` / `maintain` / `write` | Yes | Yes | Yes | Yes |
+| `read` | Yes | No | Yes | Yes |
+| `none` / no access | Yes | No | Yes | No |
+| Not logged in | Yes | No | Yes | No |
+
+Enforced by `require_project_write_middleware` on every mutating project route.
+A project with **no** linked `github_repo` has nothing to check against, so it
+is dashboard-admin only.
+
+The source-code view requires a session whenever OAuth is enabled — it fetches
+with a GitHub token and caches the result, so serving it anonymously would leak
+private source to every subsequent visitor.
 
 ### Key Design Decisions
 
-- **Coverage data is always visible.** Even users with no repo access can see coverage stats, trends, and hotspots. Coverage data isn't sensitive — it's the settings/actions and source code that need protection.
-- **Source code access is naturally gated.** The user's own OAuth token is used to fetch source from GitHub. If they don't have repo access, GitHub returns 404 — no extra logic needed.
+- **Coverage data is always visible.** Even users with no repo access can see coverage stats, trends, and hotspots. Coverage data isn't sensitive — it's the settings/actions and source code that need protection. Note the file *paths* are visible too, which reveals a fair amount about a private codebase; put the dashboard behind an authenticating proxy if that matters.
+- **Source code access is gated by the user's own token, not the server's.** The logged-in user's OAuth token fetches from GitHub, so GitHub itself enforces access — no extra logic needed. The server's `GITHUB_TOKEN` is used as a fallback **only** when OAuth is disabled entirely. Falling back to it for anonymous visitors on an OAuth-enabled instance would defeat the whole mechanism: the fetched source is cached in `source_cache` and served to whoever asks next.
 - **No `github_repo` linked = public project.** Projects without a linked GitHub repo are visible to all authenticated users. Only dashboard admins can manage their settings.
 
 ### Permission Caching
@@ -79,20 +108,29 @@ On each permission check: if cache exists and not expired, use it. Otherwise fet
 
 ## Dashboard Admin Access
 
-Dashboard-level admin controls (global settings, global API keys) are determined automatically — no configuration required.
+Dashboard-level admin controls (global settings, global API keys) require an
+explicit grant.
 
-**Two-tier resolution:**
+**Resolution order:**
 
-1. **If `OMNIVORE_GITHUB_ORG` is set:** GitHub org owners = dashboard admin. Org members = viewer.
-2. **If no org is set:** Any user who has `admin` permission on at least one linked GitHub repo in the dashboard = dashboard admin. Everyone else = viewer.
-
-This covers all team sizes with zero manual role management:
+1. **`OMNIVORE_ADMIN_USERS`** — comma-separated GitHub usernames. Unambiguous,
+   and the recommended setting for a self-hosted instance.
+2. **`OMNIVORE_GITHUB_ORG`** — GitHub org owners = dashboard admin.
+3. **Neither set** — nobody is a dashboard admin. Project-level management still
+   works via repo permissions; only the global controls are unreachable.
 
 | Scenario | How admin is determined |
 |---|---|
-| Solo dev | Admin on their own repos → dashboard admin |
-| Small startup (no org) | Lead has admin on repos → dashboard admin; devs are viewers |
-| Enterprise (with org) | Org owners → dashboard admin; members → viewer |
+| Solo dev | `OMNIVORE_ADMIN_USERS=yourname` |
+| Small startup (no org) | `OMNIVORE_ADMIN_USERS=lead1,lead2`; devs manage their own projects via repo permissions |
+| Enterprise (with org) | `OMNIVORE_GITHUB_ORG=acme` → org owners are admins |
+
+> **Removed:** an earlier design auto-granted dashboard admin to anyone with
+> `admin`/`maintain` on *any* linked repo. Because ingest auto-creates projects
+> and the project write API sets `github_repo`, that let an outsider upload a
+> report, link a repository they own, and promote themselves to dashboard admin.
+> Zero-configuration admin resolution is not safe when project-to-repo links are
+> themselves claimable.
 
 **What admins can do:**
 - Manage global settings (thresholds, retention)

@@ -81,10 +81,19 @@ pub fn parse(input: &str, meta: &PythonCoverageMeta) -> Result<(OmnivoreReport, 
         let hit = entry.executed_lines.len() as f64;
         let line_rate = if total > 0.0 { hit / total } else { 0.0 };
 
-        let branch_rate = if cov.meta.branch_coverage {
-            let num_b = entry.summary.num_branches.unwrap_or(0);
-            let cov_b = entry.summary.covered_branches.unwrap_or(0);
-            if num_b > 0 { cov_b as f64 / num_b as f64 } else { 0.0 }
+        // coverage.py only populates branch counters when run with
+        // `--branch`; without it the fields are absent and the file
+        // legitimately contributes no branches.
+        let (file_branches_covered, file_branches_total) = if cov.meta.branch_coverage {
+            (
+                entry.summary.covered_branches.unwrap_or(0),
+                entry.summary.num_branches.unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        };
+        let branch_rate = if file_branches_total > 0 {
+            file_branches_covered as f64 / file_branches_total as f64
         } else {
             0.0
         };
@@ -94,6 +103,8 @@ pub fn parse(input: &str, meta: &PythonCoverageMeta) -> Result<(OmnivoreReport, 
             line_rate,
             branch_rate,
             lines,
+            branches_covered: file_branches_covered,
+            branches_total: file_branches_total,
             source_content: None,
         });
     }
@@ -117,7 +128,7 @@ pub fn parse(input: &str, meta: &PythonCoverageMeta) -> Result<(OmnivoreReport, 
     let project_id = meta.project_id.clone().unwrap_or_else(|| "python-project".into());
     let project_name = meta.project_name.clone().unwrap_or_else(|| "python import".into());
 
-    let report = OmnivoreReport {
+    let mut report = OmnivoreReport {
         version: "0.1.0".into(),
         format: "python-coverage".into(),
         dependencies: None,
@@ -140,7 +151,7 @@ pub fn parse(input: &str, meta: &PythonCoverageMeta) -> Result<(OmnivoreReport, 
         files: file_coverages,
     };
 
-    let snapshot = CoverageSnapshot::from_report(&report, Some(source::PYTHON_COVERAGE));
+    let snapshot = CoverageSnapshot::from_report(&mut report, Some(source::PYTHON_COVERAGE));
     Ok((report, snapshot))
 }
 

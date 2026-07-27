@@ -10,6 +10,12 @@ use omnivore_core::storage::Database;
 use super::{fmt_delta_html, fmt_pct_val, html_escape, rate_color_val};
 use crate::routes::auth;
 
+/// Ceiling on rows rendered when there is no source to show alongside them.
+///
+/// Larger than any file anyone reads in a browser, and small enough that a
+/// stored bad line number costs a long page rather than the process.
+const MAX_RENDERED_LINES: i32 = 50_000;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineStatus {
     Covered,
@@ -67,7 +73,16 @@ impl FileCoveragePage {
         } else if self.file.lines.is_empty() {
             return vec![];
         } else {
-            self.file.lines.iter().map(|l| l.line_number).max().unwrap_or(1)
+            // With no source to display, the page still renders one row per line
+            // up to the highest line with coverage — so this number comes from
+            // stored data and decides how much this request allocates.
+            //
+            // Ingest now rejects implausible line numbers, but a database
+            // written before that does not get retroactively cleaned, and this
+            // is a *read* path: whoever opens the page pays. Bound it here too,
+            // so upgrading is enough to stop the bleeding without a migration.
+            let highest = self.file.lines.iter().map(|l| l.line_number).max().unwrap_or(1);
+            highest.min(MAX_RENDERED_LINES)
         };
 
         (1..=max_line)
@@ -121,21 +136,44 @@ pub async fn file_source_fragment(
 
     let mut file = find_file_across_targets(&db, &project_id, &file_path).await?;
 
+    // Source viewing is gated separately from coverage numbers. This endpoint
+    // reaches into GitHub with a *token* — the caller's if they are logged in,
+    // otherwise the server's — and caches whatever comes back. Left ungated it
+    // is a confused deputy: an anonymous visitor triggers a fetch that spends
+    // the server's credentials, private repository source lands in
+    // `source_cache`, and every later visitor is served it straight from the
+    // cache. So when OAuth is configured, require a session before either
+    // reading the cache or filling it.
+    let viewer = if auth::oauth_enabled() {
+        match auth::extract_user(&db, &jar).await {
+            Some(user) => Some(user),
+            None => return Err(StatusCode::UNAUTHORIZED),
+        }
+    } else {
+        None
+    };
+
     if let Some(repo) = &project.github_repo {
         let commit_ref = "";
         if let Ok(Some(cached)) = db.get_cached_source(repo, &file_path, commit_ref).await {
             file.source_content = Some(cached);
         } else {
-            // Prefer the logged-in user's GitHub token, fall back to server GITHUB_TOKEN
-            let user = auth::extract_user(&db, &jar).await;
-            let user_token = user.as_ref().map(|u| u.github_token.clone());
-            let env_token = std::env::var("GITHUB_TOKEN").ok();
+            // Prefer the logged-in user's token so the fetch carries that
+            // user's own repository access. Fall back to the server token only
+            // when OAuth is off — i.e. when the operator has already declared
+            // the whole instance open.
+            let user_token = viewer.as_ref().map(|u| u.github_token.clone());
+            let env_token = if viewer.is_some() {
+                None
+            } else {
+                std::env::var("GITHUB_TOKEN").ok()
+            };
             let effective_token = user_token.as_deref().or(env_token.as_deref());
 
-            if let Some(ref u) = user {
+            if let Some(ref u) = viewer {
                 tracing::info!(username = %u.username, "Source fetch using logged-in user's token");
             } else if env_token.is_some() {
-                tracing::info!("Source fetch using server GITHUB_TOKEN");
+                tracing::info!("Source fetch using server GITHUB_TOKEN (open instance)");
             } else {
                 tracing::info!("Source fetch with no token (public repos only)");
             }
@@ -184,8 +222,20 @@ pub async fn file_source_fragment(
             },
             line.number,
             match line.status {
-                LineStatus::Covered => format!(r#"<span class="hit-badge hit-covered">{}x</span>"#, line.hits),
-                LineStatus::Uncovered => r#"<span class="hit-badge hit-uncovered">0x</span>"#.to_string(),
+                // Only show a count when the producer actually tracked one.
+                // The Omnivore agent uses boolean probes, so its "hits" are
+                // always 0 or 1 — rendering "1x" on every covered line implied
+                // an execution count that was never measured. Formats that do
+                // carry real counts (JaCoCo's `ci`) still show them.
+                LineStatus::Covered if line.hits > 1 => {
+                    format!(r#"<span class="hit-badge hit-covered">{}&times;</span>"#, line.hits)
+                }
+                LineStatus::Covered => {
+                    r#"<span class="hit-badge hit-covered" title="covered">&check;</span>"#.to_string()
+                }
+                LineStatus::Uncovered => {
+                    r#"<span class="hit-badge hit-uncovered" title="not covered">&times;</span>"#.to_string()
+                }
                 LineStatus::None => String::new(),
             },
             html_escape(&line.code),

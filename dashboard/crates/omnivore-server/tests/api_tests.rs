@@ -14,8 +14,22 @@ async fn test_db() -> Database {
 /// Helper: make a request and return (status, body bytes).
 async fn send(
     db: Database,
-    req: Request<Body>,
+    mut req: Request<Body>,
 ) -> (hyper::StatusCode, Vec<u8>) {
+    // Ingest is rate-limited per client, and a request with no peer address and
+    // no `X-Forwarded-For` is keyed as "unknown" — so every test in this file
+    // would share a single bucket. The suite already makes tens of ingest calls
+    // inside one window; a few more and it would start collecting 429s, which
+    // read as a coverage defect rather than as a limiter artifact.
+    //
+    // Give each request its own identity unless a test set one deliberately.
+    if !req.headers().contains_key("x-forwarded-for") {
+        static NEXT_CLIENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT_CLIENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        req.headers_mut()
+            .insert("x-forwarded-for", format!("test-client-{n}").parse().unwrap());
+    }
+
     let app = build_router(db);
     let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
@@ -577,7 +591,11 @@ async fn project_detail_page_after_ingest() {
 
 #[tokio::test]
 async fn end_to_end_test_rig_report() {
-    let report = include_str!("../../../../test-rigs/kmp-test-rig/build/reports/omnivore/omnivore-report.json");
+    // A committed fixture, not a Gradle build artifact. `include_str!` of
+    // `test-rigs/kmp-test-rig/build/...` meant `cargo test` failed to *compile*
+    // on a clean checkout until someone had run the Gradle rig first, which
+    // silently made the dashboard's whole test suite un-runnable in CI.
+    let report = include_str!("fixtures/kmp-test-rig-report.json");
 
     let db = test_db().await;
 
@@ -649,7 +667,6 @@ async fn retention_prunes_old_snapshots() {
     let db = test_db().await;
 
     // Set low retention limits for testing via DB
-    use omnivore_core::model::settings::GlobalSettings;
     let mut settings = db.get_global_settings().await.unwrap();
     settings.retention_full = 3;
     settings.retention_summary = 2;
@@ -707,11 +724,650 @@ async fn retention_prunes_old_snapshots() {
     // The 2 oldest remaining should have files_json = None (summary-only)
     let without_files: Vec<_> = all.iter().filter(|s| s.files_json.is_none()).collect();
     assert_eq!(without_files.len(), 2, "Expected 2 summary-only snapshots, got {}", without_files.len());
+}
 
-    // Clean up env vars
-    // SAFETY: test runs single-threaded for this env manipulation
-    unsafe {
-        std::env::remove_var("OMNIVORE_RETENTION_FULL");
-        std::env::remove_var("OMNIVORE_RETENTION_SUMMARY");
+// ── Security regressions ────────────────────────────────────────────────
+//
+// Each test below pins a specific defect found in review. They are grouped
+// together so it is obvious what breaks if the corresponding guard is removed.
+
+/// Build an omnivore report with caller-chosen identity fields, so a test can
+/// push hostile strings through the ingest path the way an untrusted uploader
+/// would.
+fn report_with(project_id: &str, project_name: &str, file_path: &str) -> String {
+    serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": project_id,
+            "name": project_name,
+            "commitSha": "abc123",
+            "branch": "main",
+            "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.5, "branchRate": 0.5,
+            "linesCovered": 1, "linesTotal": 2,
+            "branchesCovered": 1, "branchesTotal": 2
+        },
+        "files": [{
+            "path": file_path,
+            "lineRate": 0.5,
+            "branchRate": 0.5,
+            "lines": [
+                {"lineNumber": 1, "hitCount": 1},
+                {"lineNumber": 2, "hitCount": 0}
+            ]
+        }]
+    })
+    .to_string()
+}
+
+async fn ingest(db: &Database, body: String) -> hyper::StatusCode {
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    send(db.clone(), req).await.0
+}
+
+async fn get_text(db: &Database, uri: &str) -> (hyper::StatusCode, String) {
+    let req = Request::get(uri).body(Body::empty()).unwrap();
+    let (status, body) = send(db.clone(), req).await;
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// The embed endpoint renders the project name into an SVG served as
+/// `image/svg+xml`. Opened directly that is a document, so unescaped markup
+/// would execute on the dashboard's own origin.
+#[tokio::test]
+async fn embed_svg_escapes_project_name() {
+    let db = test_db().await;
+    let hostile = r#"</text><script>alert(1)</script>"#;
+    assert_eq!(ingest(&db, report_with("xss-embed", hostile, "a/B.kt")).await, 201);
+
+    let (status, svg) = get_text(&db, "/embed/xss-embed/trend").await;
+    assert_eq!(status, 200);
+    assert!(
+        !svg.contains("<script>"),
+        "project name was not escaped into the SVG: {svg}"
+    );
+    assert!(svg.contains("&lt;script&gt;"), "expected escaped markup: {svg}");
+}
+
+/// Dimensions come straight off the query string and feed the SVG geometry.
+#[tokio::test]
+async fn embed_svg_clamps_dimensions() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("dims", "Dims", "a/B.kt")).await, 201);
+
+    let (status, svg) = get_text(&db, "/embed/dims/trend?width=99999999&height=-5").await;
+    assert_eq!(status, 200);
+    assert!(svg.contains(r#"width="4000""#), "width not clamped: {svg}");
+    assert!(svg.contains(r#"height="60""#), "height not clamped: {svg}");
+}
+
+/// Module names reach an inline `<script>` as JSON. `serde_json` does not
+/// escape `<`, so `</script>` in a module name used to close the element.
+#[tokio::test]
+async fn dependency_graph_json_cannot_close_script_tag() {
+    let db = test_db().await;
+    let body = serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": "dep-xss", "name": "Dep XSS",
+            "commitSha": "abc", "branch": "main", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.5, "branchRate": 0.5,
+            "linesCovered": 1, "linesTotal": 2,
+            "branchesCovered": 1, "branchesTotal": 2
+        },
+        "files": [{
+            "path": "a/B.kt", "lineRate": 0.5, "branchRate": 0.5,
+            "lines": [{"lineNumber": 1, "hitCount": 1}]
+        }],
+        "dependencies": {
+            "modules": [{
+                "id": ":evil",
+                "name": "</script><script>alert(1)</script>",
+                "type": "INTERNAL"
+            }],
+            "edges": []
+        }
+    })
+    .to_string();
+    assert_eq!(ingest(&db, body).await, 201);
+
+    let (status, html) = get_text(&db, "/projects/dep-xss/dependencies").await;
+    assert_eq!(status, 200);
+    assert!(
+        !html.contains("</script><script>alert(1)"),
+        "module name broke out of the script block"
+    );
+    assert!(html.contains(r"</script"), "expected escaped '<' in embedded JSON");
+}
+
+/// File paths are interpolated into `onclick="toggleDir(this, '…')"`, so a
+/// path containing a single quote could previously close the JS string.
+#[tokio::test]
+async fn file_tree_escapes_single_quotes_in_paths() {
+    let db = test_db().await;
+    let hostile_dir = r#"ev'il"#;
+    assert_eq!(
+        ingest(&db, report_with("quote-xss", "Quote", &format!("{hostile_dir}/pkg/B.kt"))).await,
+        201
+    );
+
+    let (status, html) = get_text(&db, "/projects/quote-xss").await;
+    assert_eq!(status, 200);
+    assert!(
+        !html.contains("toggleDir(this, 'ev'il"),
+        "single quote in a file path was not escaped"
+    );
+    assert!(html.contains("&#39;"), "expected an escaped single quote");
+}
+
+/// `github_repo` decides which repository the server fetches source from and
+/// comments on, so it must not accept a value that alters a URL path.
+#[tokio::test]
+async fn update_project_rejects_malformed_repo_slug() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("slug-proj", "Slug", "a/B.kt")).await, 201);
+
+    let req = Request::patch("/api/v1/projects/slug-proj")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"github_repo": "owner/repo/../../user"}).to_string(),
+        ))
+        .unwrap();
+    let (status, _) = send(db.clone(), req).await;
+    assert_eq!(status, 400);
+
+    // A well-formed slug still works.
+    let req = Request::patch("/api/v1/projects/slug-proj")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"github_repo": "jkjamies/omnivore"}).to_string(),
+        ))
+        .unwrap();
+    let (status, _) = send(db, req).await;
+    assert_eq!(status, 200);
+}
+
+/// Once any API key exists, every write endpoint must demand one — the
+/// projects API used to be reachable with no credential at all.
+#[tokio::test]
+async fn write_endpoints_require_api_key_once_one_exists() {
+    let db = test_db().await;
+    let created = db.create_api_key("ci", None).await.unwrap();
+
+    // No header → rejected.
+    let req = Request::post("/api/v1/projects")
+        .header("Content-Type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"id": "guarded", "name": "Guarded"}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 401);
+
+    assert_eq!(ingest(&db, report_with("guarded-ingest", "G", "a/B.kt")).await, 401);
+
+    // Valid key → accepted.
+    let req = Request::post("/api/v1/projects")
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", created.key.clone())
+        .body(Body::from(
+            serde_json::json!({"id": "guarded", "name": "Guarded"}).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 201);
+}
+
+/// A project-scoped key must not be usable against a different project.
+#[tokio::test]
+async fn project_scoped_key_cannot_write_other_projects() {
+    let db = test_db().await;
+    db.create_project(&omnivore_core::model::project::CreateProject {
+        id: "owned".into(),
+        name: "Owned".into(),
+        description: None,
+        github_repo: None,
+        source_root: None,
+        line_threshold: None,
+        branch_threshold: None,
+        line_warn_threshold: None,
+        branch_warn_threshold: None,
+    })
+    .await
+    .unwrap();
+    let scoped = db.create_api_key("scoped", Some("owned")).await.unwrap();
+
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", scoped.key.clone())
+        .body(Body::from(report_with("someone-else", "Other", "a/B.kt")))
+        .unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 403);
+
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", scoped.key)
+        .body(Body::from(report_with("owned", "Owned", "a/B.kt")))
+        .unwrap();
+    assert_eq!(send(db, req).await.0, 201);
+}
+
+/// Deleting a project must take its scoped API keys with it, or those keys
+/// outlive the thing they authorise.
+#[tokio::test]
+async fn deleting_a_project_revokes_its_scoped_keys() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("doomed", "Doomed", "a/B.kt")).await, 201);
+    let key = db.create_api_key("scoped", Some("doomed")).await.unwrap();
+
+    db.delete_project("doomed").await.unwrap();
+
+    assert!(
+        db.validate_api_key(&key.key).await.unwrap().is_none(),
+        "scoped API key survived deletion of its project"
+    );
+}
+
+/// The ratchet floor is a promise about the main line. A feature-branch build
+/// must not be able to raise it permanently.
+#[tokio::test]
+async fn ratchet_floor_only_advances_on_main_line_branches() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("ratchet", "Ratchet", "a/B.kt")).await, 201);
+    db.update_project_ratchet("ratchet", true, Some(0.40), Some(0.40))
+        .await
+        .unwrap();
+
+    let high_on_feature = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {
+            "id": "ratchet", "name": "Ratchet",
+            "commitSha": "feat", "branch": "feature/spike", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.99, "branchRate": 0.99,
+            "linesCovered": 99, "linesTotal": 100,
+            "branchesCovered": 99, "branchesTotal": 100
+        },
+        "files": []
+    })
+    .to_string();
+    assert_eq!(ingest(&db, high_on_feature).await, 201);
+
+    let project = db.get_project("ratchet").await.unwrap().unwrap();
+    assert_eq!(
+        project.ratchet_line_floor,
+        Some(0.40),
+        "a feature branch raised the ratchet floor"
+    );
+
+    // The same numbers on main do advance it.
+    let high_on_main = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {
+            "id": "ratchet", "name": "Ratchet",
+            "commitSha": "main1", "branch": "main", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 0.99, "branchRate": 0.99,
+            "linesCovered": 99, "linesTotal": 100,
+            "branchesCovered": 99, "branchesTotal": 100
+        },
+        "files": []
+    })
+    .to_string();
+    assert_eq!(ingest(&db, high_on_main).await, 201);
+
+    let project = db.get_project("ratchet").await.unwrap().unwrap();
+    assert!(
+        project.ratchet_line_floor.unwrap() > 0.98,
+        "main-line build failed to advance the floor"
+    );
+}
+
+// ── Upgrade path ────────────────────────────────────────────────────────
+
+/// Starting against a database created by an older Omnivore must work.
+///
+/// Regression test for a startup-blocking bug: `run_migrations` applied
+/// `schema.sql` before the guarded `ALTER TABLE`s, and `schema.sql` contains an
+/// index over `coverage_snapshots.source`. On an existing database
+/// `CREATE TABLE IF NOT EXISTS` is a no-op, so the column did not exist yet and
+/// index creation failed with "no such column: source" — the server refused to
+/// start, and no test caught it because every test built its database from
+/// `schema.sql` in the first place.
+#[tokio::test]
+async fn migrates_a_database_created_by_an_older_version() {
+    let dir = std::env::temp_dir().join(format!("omnivore-upgrade-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.join("legacy.db").display());
+
+    // The schema as it existed before this change: no `source` column, no
+    // tags/ratchet/retention columns, and no sessions or permission_cache.
+    {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        for stmt in [
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                github_repo TEXT, source_root TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+            "CREATE TABLE coverage_snapshots (id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id), commit_sha TEXT, branch TEXT,
+                target TEXT NOT NULL, line_rate REAL NOT NULL, branch_rate REAL NOT NULL,
+                lines_covered INTEGER NOT NULL, lines_total INTEGER NOT NULL,
+                branches_covered INTEGER NOT NULL, branches_total INTEGER NOT NULL,
+                file_count INTEGER NOT NULL, created_at TEXT NOT NULL, files_json TEXT)",
+            "CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id = 1),
+                default_line_threshold REAL NOT NULL DEFAULT 0.8,
+                default_branch_threshold REAL NOT NULL DEFAULT 0.8)",
+            "INSERT INTO settings (id) VALUES (1)",
+            "INSERT INTO projects VALUES ('legacy','Legacy App',NULL,NULL,NULL,
+                '2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')",
+            "INSERT INTO coverage_snapshots VALUES ('s1','legacy','abc','main','JVM_UNIT',
+                0.5,0.5,5,10,1,2,1,'2024-01-01T00:00:00Z','[]')",
+        ] {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
     }
+
+    // The actual assertion: this must not error.
+    let db = Database::new(&url)
+        .await
+        .expect("migrating an older database must succeed");
+
+    // Existing data survives, and `source` backfills to the native agent.
+    let project = db.get_project("legacy").await.unwrap();
+    assert!(project.is_some(), "the legacy project should still be present");
+    assert!(
+        !project.unwrap().ratchet_enabled,
+        "columns added by the ALTER phase should be readable"
+    );
+
+    let snapshot = db.get_latest_snapshot("legacy").await.unwrap().unwrap();
+    assert_eq!(snapshot.target, "JVM_UNIT");
+    assert_eq!(
+        snapshot.source, "omnivore-agent",
+        "rows predating multi-source ingestion backfill to the native agent"
+    );
+
+    // Re-opening is idempotent.
+    Database::new(&url)
+        .await
+        .expect("running migrations twice must be a no-op");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── Aggregation and series correctness ──────────────────────────────────
+
+/// Build a report with explicit per-file branch counts.
+fn report_with_branches(
+    project_id: &str,
+    target: &str,
+    files: &[(&str, i64, i64, &[(i32, i64)])],
+) -> String {
+    let file_json: Vec<Value> = files
+        .iter()
+        .map(|(path, br_cov, br_tot, lines)| {
+            let line_json: Vec<Value> = lines
+                .iter()
+                .map(|(n, h)| serde_json::json!({"lineNumber": n, "hitCount": h}))
+                .collect();
+            let covered = lines.iter().filter(|(_, h)| *h > 0).count() as f64;
+            serde_json::json!({
+                "path": path,
+                "lineRate": if lines.is_empty() { 0.0 } else { covered / lines.len() as f64 },
+                "branchRate": if *br_tot > 0 { *br_cov as f64 / *br_tot as f64 } else { 0.0 },
+                "lines": line_json,
+                "branchesCovered": br_cov,
+                "branchesTotal": br_tot,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": project_id, "name": project_id,
+            "commitSha": "abc", "branch": "main", "target": target
+        },
+        "coverage": {
+            "lineRate": 0.5, "branchRate": 0.5,
+            "linesCovered": 1, "linesTotal": 2,
+            "branchesCovered": files.iter().map(|f| f.1).sum::<i64>(),
+            "branchesTotal": files.iter().map(|f| f.2).sum::<i64>()
+        },
+        "files": file_json
+    })
+    .to_string()
+}
+
+/// Composite must union shared files rather than counting them twice.
+#[tokio::test]
+async fn composite_unions_files_shared_between_targets() {
+    let db = test_db().await;
+
+    // The same file, exercised on different lines by two targets.
+    let unit = report_with_branches(
+        "composite",
+        "JVM_UNIT",
+        &[("pkg/Shared.kt", 0, 0, &[(1, 1), (2, 0), (3, 0), (4, 0)])],
+    );
+    let instrumented = report_with_branches(
+        "composite",
+        "ANDROID_INSTRUMENTED",
+        &[("pkg/Shared.kt", 0, 0, &[(1, 0), (2, 1), (3, 0), (4, 0)])],
+    );
+    assert_eq!(ingest(&db, unit).await, 201);
+    assert_eq!(ingest(&db, instrumented).await, 201);
+
+    let (status, html) = get_text(&db, "/projects/composite").await;
+    assert_eq!(status, 200);
+
+    // Union: 4 distinct lines, 2 covered. Summing would claim 8 lines — twice
+    // as many as the file actually has.
+    assert!(
+        html.contains("2 / 4 lines"),
+        "composite should union the shared file to 2/4 lines; summing would give 2/8"
+    );
+    assert!(
+        !html.contains("/ 8 lines"),
+        "composite double-counted a file present in both targets"
+    );
+}
+
+/// A project with two series must not answer /latest with an arbitrary one.
+#[tokio::test]
+async fn latest_requires_a_series_when_several_exist() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("multi", "Multi", "a/B.kt")).await, 201);
+
+    // One series: the parameters are optional.
+    let req = Request::get("/api/v1/coverage/multi/latest").body(Body::empty()).unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 200);
+
+    // Add a second series.
+    let other = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {
+            "id": "multi", "name": "Multi",
+            "commitSha": "abc", "branch": "main", "target": "ANDROID_INSTRUMENTED"
+        },
+        "coverage": {
+            "lineRate": 0.9, "branchRate": 0.9,
+            "linesCovered": 9, "linesTotal": 10,
+            "branchesCovered": 9, "branchesTotal": 10
+        },
+        "files": []
+    })
+    .to_string();
+    assert_eq!(ingest(&db, other).await, 201);
+
+    // Ambiguous now — the caller must choose rather than get a coin flip.
+    let req = Request::get("/api/v1/coverage/multi/latest").body(Body::empty()).unwrap();
+    assert_eq!(send(db.clone(), req).await.0, 300);
+
+    // Naming the target resolves it.
+    let req = Request::get("/api/v1/coverage/multi/latest?target=ANDROID_INSTRUMENTED")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(db.clone(), req).await;
+    assert_eq!(status, 200);
+    assert_eq!(json_body(&body)["target"], "ANDROID_INSTRUMENTED");
+
+    // And the series list tells them what is available.
+    let req = Request::get("/api/v1/coverage/multi/series").body(Body::empty()).unwrap();
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 200);
+    assert_eq!(json_body(&body).as_array().unwrap().len(), 2);
+}
+
+/// Trends must not interleave two series into one sawtooth line.
+#[tokio::test]
+async fn trend_returns_a_single_series() {
+    let db = test_db().await;
+    assert_eq!(ingest(&db, report_with("trendy", "T", "a/B.kt")).await, 201);
+    assert_eq!(ingest(&db, report_with("trendy", "T", "a/B.kt")).await, 201);
+
+    let req = Request::get("/api/v1/coverage/trendy/trend?target=JVM_UNIT")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 200);
+    let points = json_body(&body);
+    let points = points.as_array().unwrap();
+    assert_eq!(points.len(), 2);
+    assert!(
+        points.iter().all(|p| p["target"] == "JVM_UNIT" && p["source"] == "omnivore-agent"),
+        "trend mixed series"
+    );
+}
+
+/// Auto-create is convenient by default but must be closable.
+#[tokio::test]
+async fn project_autocreate_can_be_disabled() {
+    // Pin the setting on this Database rather than in the environment. Setting
+    // it process-wide made every other test that was mid-ingest at that instant
+    // fail intermittently, since they all read the same variable.
+    let db = test_db().await.with_project_autocreate(false);
+
+    let status = ingest(&db, report_with("unknown-project", "X", "a/B.kt")).await;
+    assert_eq!(status, 500, "ingest to an unknown project should be refused");
+
+    let req = Request::get("/api/v1/projects").body(Body::empty()).unwrap();
+    let (_, body) = send(db, req).await;
+    assert_eq!(
+        json_body(&body).as_array().unwrap().len(),
+        0,
+        "no project should have been created"
+    );
+}
+
+/// malformed omnivore report.
+#[tokio::test]
+async fn unknown_json_is_reported_as_unknown_format() {
+    let db = test_db().await;
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"some":"unrelated","json":true}"#))
+        .unwrap();
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 400);
+    let message = String::from_utf8_lossy(&body);
+    assert!(
+        message.contains("detect format"),
+        "expected a format-detection error, got: {message}"
+    );
+}
+
+/// A project ID with quotes must not corrupt the download header.
+#[tokio::test]
+async fn export_filename_is_sanitized() {
+    let db = test_db().await;
+    assert_eq!(
+        ingest(&db, report_with("weird\"id", "Weird", "a/B.kt")).await,
+        201
+    );
+
+    let req = Request::get("/projects/weird%22id/export/report?format=json")
+        .body(Body::empty())
+        .unwrap();
+    let app = build_router(db);
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        !disposition.contains("weird\"id"),
+        "unsanitized project id reached the header: {disposition}"
+    );
+}
+
+// ── Resource-exhaustion regressions ─────────────────────────────────────
+
+/// A stored line number decides how much work a *later* request does.
+///
+/// The file coverage page renders one row per line from 1 up to the highest
+/// line it has coverage for, so a single record claiming line 2,000,000,000
+/// turned every subsequent view of that page into an attempt to allocate two
+/// billion rows. Ingest is unauthenticated on a default install and the record
+/// persists, so one small upload was a durable denial of service against
+/// whoever opened the page next — including an admin.
+#[tokio::test]
+async fn implausible_line_numbers_are_dropped_at_ingest() {
+    let db = test_db().await;
+
+    let body = serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": "line-bomb", "name": "Line Bomb",
+            "commitSha": "abc", "branch": "main", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 1.0, "branchRate": 0.0,
+            "linesCovered": 1, "linesTotal": 1,
+            "branchesCovered": 0, "branchesTotal": 0
+        },
+        "files": [{
+            "path": "src/Main.kt",
+            "lineRate": 1.0,
+            "branchRate": 0.0,
+            "lines": [
+                {"lineNumber": 7, "hitCount": 1},
+                {"lineNumber": 2000000000, "hitCount": 1},
+                {"lineNumber": 0, "hitCount": 1},
+                {"lineNumber": -5, "hitCount": 1}
+            ]
+        }]
+    })
+    .to_string();
+
+    // The upload still succeeds — a broken producer keeps the coverage it got
+    // right — but the impossible records do not reach storage.
+    assert_eq!(ingest(&db, body).await, 201);
+
+    let (status, page) = get_text(&db, "/projects/line-bomb/files/src/Main.kt").await;
+    assert_eq!(status, 200);
+    assert!(
+        !page.contains("2000000000"),
+        "an implausible line number reached the rendered page"
+    );
+    // Line 7 is real, so the page still goes up to it.
+    assert!(page.contains(">7<"), "the plausible line should still render");
 }

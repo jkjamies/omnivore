@@ -74,18 +74,18 @@ pub fn parse(json: &str, meta: &LlvmCovMeta) -> Result<(OmnivoreReport, Coverage
         let covered = line_coverage.iter().filter(|l| l.hit_count > 0).count() as f64;
         let line_rate = if total > 0.0 { covered / total } else { 0.0 };
 
-        let branch_rate = file
-            .summary
-            .as_ref()
-            .and_then(|s| s.branches.as_ref())
-            .map(|b| b.percent / 100.0)
-            .unwrap_or(0.0);
+        let file_branches = file.summary.as_ref().and_then(|s| s.branches.as_ref());
+        let branch_rate = file_branches.map(|b| b.percent / 100.0).unwrap_or(0.0);
 
         files.push(FileCoverage {
             path: file.filename.clone(),
             line_rate,
             branch_rate,
             lines: line_coverage,
+            // llvm-cov reports per-file branch counts directly; keeping them
+            // lets the dashboard weight rollups instead of averaging rates.
+            branches_covered: file_branches.map(|b| b.covered).unwrap_or(0),
+            branches_total: file_branches.map(|b| b.count).unwrap_or(0),
             source_content: None,
         });
     }
@@ -129,7 +129,7 @@ pub fn parse(json: &str, meta: &LlvmCovMeta) -> Result<(OmnivoreReport, Coverage
     let project_id = meta.project_id.clone().unwrap_or_else(|| "llvm-cov-project".into());
     let project_name = meta.project_name.clone().unwrap_or_else(|| "llvm-cov import".into());
 
-    let report = OmnivoreReport {
+    let mut report = OmnivoreReport {
         version: "0.1.0".into(),
         format: "llvm-cov".into(),
         dependencies: None,
@@ -152,7 +152,7 @@ pub fn parse(json: &str, meta: &LlvmCovMeta) -> Result<(OmnivoreReport, Coverage
         files,
     };
 
-    let snapshot = CoverageSnapshot::from_report(&report, Some(source::LLVM_COV));
+    let snapshot = CoverageSnapshot::from_report(&mut report, Some(source::LLVM_COV));
     Ok((report, snapshot))
 }
 

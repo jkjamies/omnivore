@@ -165,7 +165,7 @@ pub fn parse(input: &str, meta: &LcovMeta) -> Result<(OmnivoreReport, CoverageSn
     let project_id = meta.project_id.clone().unwrap_or_else(|| "lcov-project".into());
     let project_name = meta.project_name.clone().unwrap_or_else(|| "lcov import".into());
 
-    let report = OmnivoreReport {
+    let mut report = OmnivoreReport {
         version: "0.1.0".into(),
         format: "lcov".into(),
         dependencies: None,
@@ -188,7 +188,7 @@ pub fn parse(input: &str, meta: &LcovMeta) -> Result<(OmnivoreReport, CoverageSn
         files,
     };
 
-    let snapshot = CoverageSnapshot::from_report(&report, Some(source::LCOV));
+    let snapshot = CoverageSnapshot::from_report(&mut report, Some(source::LCOV));
     Ok((report, snapshot))
 }
 
@@ -215,6 +215,9 @@ fn flush_file(
             line_rate,
             branch_rate,
             lines: std::mem::take(current_lines),
+            // From this file's BRF/BRH (or its counted BRDA records).
+            branches_covered: file_brh,
+            branches_total: file_brf,
             source_content: None,
         });
     }

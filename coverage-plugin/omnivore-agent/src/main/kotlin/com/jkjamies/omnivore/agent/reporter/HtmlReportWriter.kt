@@ -1,6 +1,7 @@
 package com.jkjamies.omnivore.agent.reporter
 
 import java.io.File
+import java.util.Locale
 
 /**
  * Writes a self-contained HTML coverage report for local viewing.
@@ -11,12 +12,12 @@ object HtmlReportWriter {
         outputFile.parentFile?.mkdirs()
 
         val summary = analysisResult.summary
-        val linePercent = "%.1f".format(summary.lineRate * 100)
-        val branchPercent = "%.1f".format(summary.branchRate * 100)
+        val linePercent = pct(summary.lineRate * 100)
+        val branchPercent = pct(summary.branchRate * 100)
 
         val fileRows = analysisResult.files.joinToString("\n") { file ->
-            val fileLinePercent = "%.1f".format(file.lineRate * 100)
-            val fileBranchPercent = "%.1f".format(file.branchRate * 100)
+            val fileLinePercent = pct(file.lineRate * 100)
+            val fileBranchPercent = pct(file.branchRate * 100)
             val covered = file.lines.count { it.hitCount > 0 }
             val total = file.lines.size
             val barColor = when {
@@ -112,6 +113,18 @@ $fileRows
 
         outputFile.writeText(html)
     }
+
+    /**
+     * Format a percentage with a `.` decimal separator, always.
+     *
+     * `"%.1f".format(x)` uses the *default locale*, so on a machine set to a
+     * comma-decimal locale this produced `85,3` — which lands inside
+     * `style="width: 85,3%"`, an invalid CSS declaration the browser drops, and
+     * every coverage bar silently renders at zero width. The report is a
+     * machine-readable document; its numbers should not depend on where the
+     * build ran.
+     */
+    private fun pct(value: Double): String = String.format(Locale.ROOT, "%.1f", value)
 
     private fun colorClass(rate: Double): String = when {
         rate >= 0.8 -> "green"

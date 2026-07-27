@@ -5,7 +5,11 @@ use crate::model::session::Session;
 use crate::model::settings::GlobalSettings;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
+use std::str::FromStr;
+use std::time::Duration;
 
 /// Result of the ratchet check performed during ingest.
 #[derive(Debug, Default)]
@@ -19,77 +23,89 @@ pub struct RatchetResult {
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
+    /// Resolved once at construction rather than read from the environment on
+    /// every ingest.
+    ///
+    /// Reading it per call made the setting process-global *state*, which meant
+    /// a test could not exercise the closed mode without changing behaviour for
+    /// every other test running at the same moment — and that is exactly what
+    /// happened: `project_autocreate_can_be_disabled` set the variable while
+    /// ~40 concurrent `#[tokio::test]`s were ingesting, so an unrelated test
+    /// occasionally got a refusal it never asked for. A suite that fails
+    /// roughly one run in ten teaches people to press re-run, which is worse
+    /// than no suite.
+    allow_project_autocreate: bool,
 }
 
 impl Database {
     pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
+        // Connection-level PRAGMAs must be set per connection, not once against
+        // a pooled connection — `PRAGMA foreign_keys = ON` executed as a plain
+        // query only applies to whichever of the pool's connections ran it, so
+        // ON DELETE CASCADE silently did nothing on the other four.
+        //
+        // WAL + a busy timeout matter for the self-hosted case: with the
+        // default rollback journal, a page render reading while an ingest
+        // writes fails outright with SQLITE_BUSY instead of waiting.
+        let options = SqliteConnectOptions::from_str(database_url)?
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(5));
+
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .acquire_timeout(Duration::from_secs(10))
+            .connect_with(options)
             .await?;
 
-        let db = Self { pool };
+        let db = Self {
+            pool,
+            allow_project_autocreate: auto_create_projects(),
+        };
         db.run_migrations().await?;
         Ok(db)
     }
 
+    /// Override whether ingest may create unseen projects.
+    ///
+    /// The environment decides this for a real server; this exists so a test
+    /// can pin the setting on one `Database` without mutating process state
+    /// that every other concurrently-running test also reads.
+    pub fn with_project_autocreate(mut self, allowed: bool) -> Self {
+        self.allow_project_autocreate = allowed;
+        self
+    }
+
+    /// Table creation DDL, shared with the build-time sqlx database.
+    ///
+    /// See `crates/omnivore-core/schema.sql` for why this lives in a file
+    /// rather than inline here.
+    pub const SCHEMA_SQL: &'static str = include_str!("../../schema.sql");
+
     async fn run_migrations(&self) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                github_repo TEXT,
-                source_root TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
+        // Order matters, in three phases.
+        //
+        // On an *existing* database `CREATE TABLE IF NOT EXISTS` is a no-op, so
+        // a table keeps whatever columns it already had. Any index over a
+        // column that only the ALTER phase adds must therefore be created
+        // *after* that phase — otherwise upgrading an older deployment fails
+        // with "no such column" and the server refuses to start. Indexes are
+        // split out by inspection rather than by convention so this cannot
+        // regress when a new index is added to schema.sql.
+        let (indexes, tables): (Vec<&str>, Vec<&str>) = Self::schema_statements()
+            .partition(|s| s.to_ascii_uppercase().starts_with("CREATE INDEX"));
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS coverage_snapshots (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL REFERENCES projects(id),
-                commit_sha TEXT,
-                branch TEXT,
-                target TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'omnivore-agent',
-                line_rate REAL NOT NULL,
-                branch_rate REAL NOT NULL,
-                lines_covered INTEGER NOT NULL,
-                lines_total INTEGER NOT NULL,
-                branches_covered INTEGER NOT NULL,
-                branches_total INTEGER NOT NULL,
-                file_count INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                files_json TEXT,
-                dependencies_json TEXT
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
+        // Phase 1: tables and seed rows. Creates everything on a fresh install;
+        // no-ops on an existing one.
+        for statement in tables {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_snapshots_project
-             ON coverage_snapshots(project_id, created_at DESC)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS source_cache (
-                repo TEXT NOT NULL,
-                path TEXT NOT NULL,
-                commit_ref TEXT NOT NULL DEFAULT '',
-                content TEXT NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY (repo, path, commit_ref)
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
+        // Phase 2: the guarded ALTER TABLEs below upgrade databases created by
+        // earlier versions, which predate columns the schema file now declares.
+        // They are no-ops on a fresh database.
 
         // Migration: add dependencies_json column if it doesn't exist
         // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check the schema.
@@ -186,23 +202,6 @@ impl Database {
                 .await?;
         }
 
-        // Global settings table (single row, id=1)
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS settings (
-                id INTEGER PRIMARY KEY CHECK(id = 1),
-                default_line_threshold REAL NOT NULL DEFAULT 0.8,
-                default_branch_threshold REAL NOT NULL DEFAULT 0.8,
-                default_line_warn_threshold REAL NOT NULL DEFAULT 0.5,
-                default_branch_warn_threshold REAL NOT NULL DEFAULT 0.5
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query("INSERT OR IGNORE INTO settings (id) VALUES (1)")
-            .execute(&self.pool)
-            .await?;
-
         // Migration: add warning threshold columns to settings if missing
         let has_settings_warn: bool = sqlx::query_scalar::<_, i32>(
             "SELECT COUNT(*) FROM pragma_table_info('settings') WHERE name = 'default_line_warn_threshold'"
@@ -271,60 +270,28 @@ impl Database {
                 .await?;
         }
 
-        // API keys table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS api_keys (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                key_hash TEXT NOT NULL,
-                key_prefix TEXT NOT NULL,
-                project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-                created_at TEXT NOT NULL,
-                last_used_at TEXT
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Sessions table (OAuth)
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                github_username TEXT NOT NULL,
-                github_token TEXT NOT NULL,
-                avatar_url TEXT,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Permission cache table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS permission_cache (
-                user_id TEXT NOT NULL,
-                repo TEXT NOT NULL,
-                permission TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                PRIMARY KEY (user_id, repo)
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Enable foreign keys for CASCADE support
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&self.pool)
-            .await?;
+        // Phase 3: indexes, now that every column they reference exists.
+        for statement in indexes {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
 
         Ok(())
+    }
+
+    /// Split [`Self::SCHEMA_SQL`] into executable statements.
+    ///
+    /// Statements are separated by a semicolon at end of line; comment lines are
+    /// stripped first, so a statement preceded by a comment block is not
+    /// mistaken for a comment and skipped whole.
+    fn schema_statements() -> impl Iterator<Item = &'static str> {
+        Self::SCHEMA_SQL.split(";\n").filter_map(|chunk| {
+            let mut rest = chunk.trim_start();
+            while let Some(stripped) = rest.strip_prefix("--") {
+                rest = stripped.find('\n').map(|i| &stripped[i + 1..]).unwrap_or("").trim_start();
+            }
+            let rest = rest.trim();
+            if rest.is_empty() { None } else { Some(rest) }
+        })
     }
 
     // -- Projects --
@@ -423,17 +390,31 @@ impl Database {
         self.get_project(id).await
     }
 
+    /// Delete a project and everything that references it.
+    ///
+    /// Runs in one transaction so a failure part-way through can't leave
+    /// orphaned snapshots or, worse, live API keys pointing at a project that
+    /// no longer exists.
     pub async fn delete_project(&self, id: &str) -> Result<(), sqlx::Error> {
-        // Delete snapshots first (foreign key), then source cache, then project
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("DELETE FROM coverage_snapshots WHERE project_id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
+            .await?;
+        // Project-scoped keys authorise uploads to this project; they must not
+        // outlive it. The schema declares ON DELETE CASCADE, but deleting
+        // explicitly keeps this correct regardless of the foreign_keys pragma.
+        sqlx::query("DELETE FROM api_keys WHERE project_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM projects WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
-        Ok(())
+
+        tx.commit().await
     }
 
     // -- Global settings --
@@ -1073,7 +1054,22 @@ impl Database {
 
     // -- Source cache --
 
+    /// How long cached source stays servable when it was fetched without a
+    /// pinned commit.
+    ///
+    /// An entry keyed by a real commit SHA is immutable and never needs to
+    /// expire. An entry keyed by the empty ref was fetched from a moving
+    /// branch head, so it goes stale the moment anyone pushes — and, with no
+    /// expiry at all, the file view showed whatever was fetched first for the
+    /// life of the database.
+    const FLOATING_SOURCE_TTL_SECONDS: i64 = 60 * 60;
+
     /// Look up cached source content.
+    ///
+    /// Entries fetched against a floating ref are ignored once older than
+    /// [`Self::FLOATING_SOURCE_TTL_SECONDS`], so the caller re-fetches instead
+    /// of rendering stale source against current coverage line numbers — a
+    /// mismatch that shows covered/uncovered marks against the wrong lines.
     pub async fn get_cached_source(
         &self,
         repo: &str,
@@ -1081,14 +1077,56 @@ impl Database {
         commit_ref: &str,
     ) -> Result<Option<String>, sqlx::Error> {
         let ref_key = if commit_ref.is_empty() { "" } else { commit_ref };
-        sqlx::query_scalar::<_, String>(
-            "SELECT content FROM source_cache WHERE repo = ? AND path = ? AND commit_ref = ?",
+
+        let row = sqlx::query_as::<_, (String, String)>(
+            "SELECT content, fetched_at FROM source_cache
+             WHERE repo = ? AND path = ? AND commit_ref = ?",
         )
         .bind(repo)
         .bind(path)
         .bind(ref_key)
         .fetch_optional(&self.pool)
-        .await
+        .await?;
+
+        let Some((content, fetched_at)) = row else {
+            return Ok(None);
+        };
+
+        if !ref_key.is_empty() {
+            // Pinned to an immutable commit — always fresh.
+            return Ok(Some(content));
+        }
+
+        let is_fresh = DateTime::parse_from_rfc3339(&fetched_at)
+            .map(|t| {
+                (Utc::now() - t.with_timezone(&Utc)).num_seconds()
+                    < Self::FLOATING_SOURCE_TTL_SECONDS
+            })
+            // An unparseable timestamp predates this check; treat it as stale
+            // and re-fetch rather than serving something of unknown age.
+            .unwrap_or(false);
+
+        Ok(if is_fresh { Some(content) } else { None })
+    }
+
+    /// Delete cached source that can no longer be served.
+    ///
+    /// Source blobs are by far the largest thing in the database, and nothing
+    /// used to remove them — a dashboard accumulated every file anyone had ever
+    /// viewed, forever.
+    pub async fn prune_source_cache(&self) -> Result<u64, sqlx::Error> {
+        let cutoff = (Utc::now()
+            - chrono::Duration::seconds(Self::FLOATING_SOURCE_TTL_SECONDS))
+        .to_rfc3339();
+
+        let result = sqlx::query(
+            "DELETE FROM source_cache WHERE commit_ref = '' AND fetched_at < ?",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 
     /// Store source content in cache.
@@ -1124,6 +1162,17 @@ impl Database {
     ) -> Result<RatchetResult, sqlx::Error> {
         // Ensure project exists
         if self.get_project(&snapshot.project_id).await?.is_none() {
+            if !self.allow_project_autocreate {
+                // Closed mode: a project must be created deliberately before
+                // it can receive coverage. Otherwise any caller who reaches
+                // ingest can mint rows for arbitrary project IDs — a typo in a
+                // CI config silently creates a second project rather than
+                // failing, and an open instance accumulates junk indefinitely.
+                return Err(sqlx::Error::Protocol(format!(
+                    "Project '{}' does not exist and OMNIVORE_ALLOW_PROJECT_AUTOCREATE is disabled",
+                    snapshot.project_id
+                )));
+            }
             let input = CreateProject {
                 id: snapshot.project_id.clone(),
                 name: project_name
@@ -1153,12 +1202,18 @@ impl Database {
                     .map(|floor| snapshot.branch_rate < floor)
                     .unwrap_or(false);
 
-                // Advance floor (only updates if new rate is higher, thanks to MAX in SQL)
-                self.advance_ratchet_floor(
-                    &snapshot.project_id,
-                    snapshot.line_rate,
-                    snapshot.branch_rate,
-                ).await?;
+                // Only a release-line build may raise the floor. Advancing on
+                // every ingest let a one-off feature branch permanently raise
+                // the bar for the whole project — and, because the branch was
+                // never merged, raise it to a number no build on the main line
+                // could reach again.
+                if is_ratchet_branch(snapshot.branch.as_deref()) {
+                    self.advance_ratchet_floor(
+                        &snapshot.project_id,
+                        snapshot.line_rate,
+                        snapshot.branch_rate,
+                    ).await?;
+                }
 
                 RatchetResult {
                     line_floor_violated: line_violated,
@@ -1291,7 +1346,9 @@ impl Database {
         )
         .bind(&id)
         .bind(github_username)
-        .bind(github_token)
+        // Encrypted when OMNIVORE_SECRET_KEY is configured; stored as-is
+        // otherwise, so upgrading does not require the operator to act first.
+        .bind(crate::crypto::encrypt(github_token))
         .bind(avatar_url)
         .bind(now.to_rfc3339())
         .bind(expires_at.to_rfc3339())
@@ -1308,6 +1365,13 @@ impl Database {
         })
     }
 
+    /// Look up a live session, decrypting its stored GitHub token.
+    ///
+    /// A session whose token cannot be decrypted is treated as absent rather
+    /// than surfaced with a broken token: that happens when
+    /// `OMNIVORE_SECRET_KEY` is missing or has changed, and the right outcome is
+    /// to send the user back through login rather than to make GitHub calls
+    /// with garbage.
     pub async fn get_session(&self, session_id: &str) -> Result<Option<Session>, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
         let session = sqlx::query_as!(
@@ -1326,7 +1390,24 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(session)
+        let Some(mut session) = session else {
+            return Ok(None);
+        };
+
+        match crate::crypto::decrypt(&session.github_token) {
+            Ok(token) => {
+                session.github_token = token;
+                Ok(Some(session))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    username = %session.github_username,
+                    "Discarding session with unreadable token"
+                );
+                Ok(None)
+            }
+        }
     }
 
     pub async fn delete_session(&self, session_id: &str) -> Result<(), sqlx::Error> {
@@ -1394,6 +1475,39 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+/// Whether ingest may create a project it has not seen before.
+///
+/// Defaults to on, which is what makes first-run setup a single `curl`. Set
+/// `OMNIVORE_ALLOW_PROJECT_AUTOCREATE=false` on a shared or exposed instance so
+/// coverage can only be uploaded to projects someone created deliberately.
+fn auto_create_projects() -> bool {
+    match std::env::var("OMNIVORE_ALLOW_PROJECT_AUTOCREATE") {
+        Ok(v) if !v.trim().is_empty() => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        _ => true,
+    }
+}
+
+/// Branches whose snapshots are allowed to raise a project's ratchet floor.
+///
+/// Defaults to the usual release lines; override with a comma-separated
+/// `OMNIVORE_RATCHET_BRANCHES`. A snapshot with no branch recorded still
+/// counts, since single-branch setups often omit it.
+fn is_ratchet_branch(branch: Option<&str>) -> bool {
+    let Some(branch) = branch.map(str::trim).filter(|b| !b.is_empty()) else {
+        return true;
+    };
+    match std::env::var("OMNIVORE_RATCHET_BRANCHES") {
+        Ok(list) if !list.trim().is_empty() => list
+            .split(',')
+            .map(str::trim)
+            .any(|allowed| !allowed.is_empty() && allowed.eq_ignore_ascii_case(branch)),
+        _ => branch.eq_ignore_ascii_case("main") || branch.eq_ignore_ascii_case("master"),
     }
 }
 

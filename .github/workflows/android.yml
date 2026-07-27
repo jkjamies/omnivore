@@ -1,0 +1,120 @@
+name: Android
+
+# The AGP build-time transform is the only instrumentation path that no other
+# job reaches. `plugin.yml` compiles it; `coverage.yml` runs the *JVM agent*
+# through the KMP rig. Neither one ever asks real AGP to load
+# `OmnivoreClassVisitorFactory` and hand it a class.
+#
+# That mattered: the build-time path had drifted from the agent's — it ignored
+# `switch` statements entirely and sized every probe array at a hardcoded 1024,
+# so a large class would have thrown `ArrayIndexOutOfBoundsException` inside the
+# app under test. The logic is now shared and unit-tested
+# (`BuildTimeInstrumentationTest`), but unit tests use a stand-in for AGP. This
+# job uses the real thing.
+#
+# No emulator: `omnivoreWriteBuildProbeMap` depends on AGP's ASM transform
+# tasks, so building it runs the transform over every app class and writes the
+# probe map it produced. If the transform fails to load, throws, or silently
+# instruments nothing, that file is missing or empty.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'coverage-plugin/**'
+      - 'test-rigs/android-test-rig/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'coverage-plugin/**'
+      - 'test-rigs/android-test-rig/**'
+      - '.github/workflows/android.yml'
+
+jobs:
+  build-time-transform:
+    runs-on: ubuntu-latest
+    # The transform itself takes ~2.5 minutes. This is a backstop against a
+    # hang, not a performance target — without it GitHub's 6-hour default
+    # applies, and the unit-test step below has already been observed hanging.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Run the AGP bytecode transform
+        working-directory: test-rigs/android-test-rig
+        run: ./gradlew :app:omnivoreWriteBuildProbeMap --stacktrace
+
+      - name: Check the transform actually instrumented something
+        working-directory: test-rigs/android-test-rig
+        run: |
+          PROBES=build/omnivore/connectedAndroidTest/build-time.probes
+          if [ ! -s "$PROBES" ]; then
+            echo "::error::AGP transform produced no probe map at $PROBES."
+            echo "Either OmnivoreClassVisitorFactory never ran, or it instrumented no classes."
+            exit 1
+          fi
+          # Magic (8) + version (2) + at least one class entry.
+          SIZE=$(wc -c < "$PROBES")
+          if [ "$SIZE" -le 10 ]; then
+            echo "::error::Probe map is header-only ($SIZE bytes) — no classes were instrumented."
+            exit 1
+          fi
+          echo "Build-time probe map: $SIZE bytes"
+
+      # Advisory, and bounded, because it currently does not finish.
+      #
+      # On its first CI run this step ran for 29 minutes without completing,
+      # while the two steps above — the ones this job exists for — passed in
+      # 2m21s. The Android rig's unit tests are small; half an hour is a hang,
+      # not slowness. The JVM agent attaches `-javaagent` to every `Test` task,
+      # so this may be an agent defect rather than a CI problem, which makes it
+      # worth keeping visible rather than deleting. The equivalent run on the
+      # KMP rig (`coverage.yml`) passes, so whatever this is, it is specific to
+      # the Android rig.
+      #
+      # Blocking on it would block every merge on an unrelated open question.
+      # Bounded + advisory keeps a data point coming from every run: if it
+      # starts passing, drop the two lines below; if it keeps timing out, the
+      # timeout is the reproduction.
+      #
+      # Tracked in docs/CODEBASE-REVIEW.md, Part 4.
+      - name: Run unit tests and generate a report (advisory — see note)
+        id: android_unit_tests
+        working-directory: test-rigs/android-test-rig
+        timeout-minutes: 12
+        continue-on-error: true
+        run: ./gradlew testDebugUnitTest omnivoreReport --stacktrace
+
+      # `continue-on-error` makes GitHub report the step's *conclusion* as
+      # success, so without this the hang is invisible in the UI — the whole
+      # point of keeping the step was to stay informed by it. `outcome` holds
+      # the real result, so surface it as an annotation on the run.
+      - name: Surface the advisory result
+        if: always()
+        run: |
+          if [ "${{ steps.android_unit_tests.outcome }}" = "failure" ]; then
+            echo "::warning title=Android rig unit tests still not finishing::\
+          Timed out after 12 minutes. Known open defect — see docs/CODEBASE-REVIEW.md Part 4."
+          else
+            echo "::notice title=Android rig unit tests completed::\
+          This step has been failing; if it now passes consistently, drop the \
+          timeout/continue-on-error from android.yml and update CODEBASE-REVIEW.md Part 4."
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-rig-output
+          path: |
+            test-rigs/android-test-rig/build/omnivore/
+            test-rigs/android-test-rig/build/reports/omnivore/

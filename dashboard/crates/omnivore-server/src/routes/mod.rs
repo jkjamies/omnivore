@@ -1,9 +1,12 @@
+pub mod api_auth;
 pub mod auth;
 pub mod badge;
 pub mod coverage;
+pub mod csrf;
 pub mod embed;
 pub mod export;
 pub mod health;
 pub mod pages;
 pub mod projects;
+pub mod rate_limit;
 pub mod settings;

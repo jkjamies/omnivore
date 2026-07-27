@@ -8,6 +8,12 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# The minimum toolchain that can build this workspace, driven by dependencies
+# rather than by anything in our own source (askama and time both need 1.88).
+# Declared so `cargo build` fails with "rustc X is not supported by the
+# following packages" naming the culprit, instead of an obscure compile error —
+# and so the Dockerfile's base image pin has something to track.
+rust-version = "1.88"
 license = "Apache-2.0"
 
 [workspace.dependencies]
@@ -17,7 +23,7 @@ tokio = { version = "1", features = ["full"] }
 # Web framework
 axum = { version = "0.8", features = ["json"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

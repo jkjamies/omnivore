@@ -28,8 +28,10 @@ object CoverageAnalyzer {
      */
     fun analyze(executionData: ExecutionDataStore, probeMap: ProbeMap): AnalysisResult {
         val fileLines = mutableMapOf<String, MutableMap<Int, LineInfo>>()
-        var totalBranches = 0
-        var coveredBranches = 0
+        // Branch totals are accumulated per file, then summed — the overall rate
+        // must be covered-edges / total-edges across the whole run, never an
+        // average of per-file rates.
+        val fileBranches = mutableMapOf<String, BranchTally>()
 
         for (classMap in probeMap.getAllClassMaps()) {
             val probeData = executionData.getData(classMap.classId) ?: continue
@@ -39,6 +41,7 @@ object CoverageAnalyzer {
             val filePath = resolveFilePath(classMap.className, classMap.sourceFile)
 
             val lines = fileLines.getOrPut(filePath) { mutableMapOf() }
+            val branches = fileBranches.getOrPut(filePath) { BranchTally() }
 
             for (probeEntry in classMap.getProbes()) {
                 if (probeEntry.lineNumber <= 0) continue
@@ -58,18 +61,25 @@ object CoverageAnalyzer {
                             lines[probeEntry.lineNumber] = existing.copy(hitCount = 1L)
                         }
                     }
-                    ProbeType.BRANCH -> {
-                        totalBranches++
-                        if (isHit) coveredBranches++
 
-                        // Associate branch with the line it's on
+                    ProbeType.BRANCH -> {
+                        // Each branch probe is one control-flow edge. Covered
+                        // means that edge was actually taken, not merely that
+                        // the condition was reached.
+                        branches.total++
+                        if (isHit) branches.covered++
+
+                        // Attribute the edge to the line holding the decision.
+                        // A branch probe can precede its line probe (a loop
+                        // condition at the bottom of the body), so create the
+                        // line entry if it isn't there yet rather than dropping
+                        // the branch on the floor as the old code did.
                         val existing = lines[probeEntry.lineNumber]
-                        if (existing != null) {
-                            lines[probeEntry.lineNumber] = existing.copy(
-                                branchCount = existing.branchCount + 1,
-                                branchesCovered = existing.branchesCovered + if (isHit) 1 else 0,
-                            )
-                        }
+                            ?: LineInfo(hitCount = 0L, branchCount = 0, branchesCovered = 0)
+                        lines[probeEntry.lineNumber] = existing.copy(
+                            branchCount = existing.branchCount + 1,
+                            branchesCovered = existing.branchesCovered + if (isHit) 1 else 0,
+                        )
                     }
                 }
             }
@@ -84,24 +94,31 @@ object CoverageAnalyzer {
             val totalLines = sortedLines.size.toLong()
             val coveredLines = sortedLines.count { it.hitCount > 0 }.toLong()
             val lineRate = if (totalLines > 0) coveredLines.toDouble() / totalLines else 0.0
-            val branchRate = lines.values.let { vals ->
-                val totalBr = vals.sumOf { it.branchCount }
-                val covBr = vals.sumOf { it.branchesCovered }
-                if (totalBr > 0) covBr.toDouble() / totalBr else 1.0
-            }
+
+            val tally = fileBranches[path] ?: BranchTally()
+            // A file with no branches is reported as 0.0, not 1.0. Claiming
+            // "100% branch coverage" for a file that has no branches to cover
+            // is meaningless on its own and actively harmful once aggregated —
+            // it used to pull directory and project averages upward.
+            // Consumers should weight by branchesTotal, which is 0 here.
+            val branchRate = if (tally.total > 0) tally.covered.toDouble() / tally.total else 0.0
 
             FileCoverage(
                 path = path,
                 lineRate = lineRate,
                 branchRate = branchRate,
                 lines = sortedLines,
+                branchesCovered = tally.covered.toLong(),
+                branchesTotal = tally.total.toLong(),
             )
         }.sortedBy { it.path }
 
         val totalLines = fileCoverages.sumOf { it.lines.size.toLong() }
         val coveredLines = fileCoverages.sumOf { fc -> fc.lines.count { it.hitCount > 0 }.toLong() }
+        val totalBranches = fileCoverages.sumOf { it.branchesTotal }
+        val coveredBranches = fileCoverages.sumOf { it.branchesCovered }
         val overallLineRate = if (totalLines > 0) coveredLines.toDouble() / totalLines else 0.0
-        val overallBranchRate = if (totalBranches > 0) coveredBranches.toDouble() / totalBranches else 1.0
+        val overallBranchRate = if (totalBranches > 0) coveredBranches.toDouble() / totalBranches else 0.0
 
         return AnalysisResult(
             files = fileCoverages,
@@ -110,11 +127,13 @@ object CoverageAnalyzer {
                 branchRate = overallBranchRate,
                 linesCovered = coveredLines,
                 linesTotal = totalLines,
-                branchesCovered = coveredBranches.toLong(),
-                branchesTotal = totalBranches.toLong(),
+                branchesCovered = coveredBranches,
+                branchesTotal = totalBranches,
             )
         )
     }
+
+    private class BranchTally(var covered: Int = 0, var total: Int = 0)
 
     /**
      * Resolve a source file path from class name and optional source file name.

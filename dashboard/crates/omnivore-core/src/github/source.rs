@@ -1,3 +1,4 @@
+use crate::validation::{is_safe_repo_path, is_valid_repo_slug};
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -15,6 +16,17 @@ pub async fn fetch_source(
     commit_sha: Option<&str>,
     github_token: Option<&str>,
 ) -> Option<String> {
+    // Both values land in the URL path, and both originate from data the
+    // dashboard accepted over the network (project settings and coverage
+    // reports). Validate before building the request.
+    if !is_valid_repo_slug(github_repo) || !is_safe_repo_path(file_path) {
+        tracing::warn!(repo = %github_repo, path = %file_path, "Rejected unsafe source fetch");
+        return None;
+    }
+    if commit_sha.is_some_and(|sha| !is_valid_git_ref(sha)) {
+        return None;
+    }
+
     let client = Client::new();
     let git_ref = commit_sha.unwrap_or("HEAD");
     let url = format!(
@@ -38,6 +50,18 @@ pub async fn fetch_source(
     }
 }
 
+/// A git ref safe to interpolate into a URL path: a commit SHA, tag, or branch
+/// name without traversal or separators of its own.
+fn is_valid_git_ref(git_ref: &str) -> bool {
+    !git_ref.is_empty()
+        && git_ref.len() <= 100
+        && git_ref != "."
+        && git_ref != ".."
+        && git_ref
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 // -- Repo tree cache for file path resolution --
 
 #[derive(Deserialize)]
@@ -52,10 +76,31 @@ struct TreeEntry {
     entry_type: String,
 }
 
-/// In-memory cache: repo → { filename → full_path }.
-/// Keyed by "owner/repo" so each repo is fetched once per server lifetime.
-static TREE_CACHE: std::sync::LazyLock<Mutex<HashMap<String, HashMap<String, Vec<String>>>>> =
+/// In-memory cache: repo → (fetched_at, { filename → full_paths }).
+///
+/// This used to be keyed by repo with no expiry and no bound: every repo ever
+/// viewed kept its entire file list resident for the life of the process, and a
+/// file added or renamed upstream never appeared until a restart
+/// (`invalidate_tree_cache` existed but nothing called it). Entries now expire,
+/// and the map is capped.
+static TREE_CACHE: std::sync::LazyLock<Mutex<HashMap<String, CachedTree>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct CachedTree {
+    fetched_at: std::time::Instant,
+    index: HashMap<String, Vec<String>>,
+}
+
+/// How long a repo's file listing stays usable.
+///
+/// The tree is only used to map a coverage path onto a repo path, so staleness
+/// costs a re-resolve, not correctness. Fifteen minutes keeps a browsing
+/// session to one API call while still picking up renames.
+const TREE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Cap on distinct repos held in memory. A dashboard with many linked projects
+/// would otherwise accumulate every one of their file listings.
+const TREE_CACHE_MAX_REPOS: usize = 32;
 
 /// Fetch the repo's file tree (single API call, cached) and find the best match
 /// for a coverage file path like `com/example/Foo.kt`.
@@ -120,11 +165,19 @@ async fn get_or_fetch_tree(
     github_repo: &str,
     github_token: Option<&str>,
 ) -> Option<HashMap<String, Vec<String>>> {
+    if !is_valid_repo_slug(github_repo) {
+        tracing::warn!(repo = %github_repo, "Rejected tree fetch for invalid repo slug");
+        return None;
+    }
+
     // Check cache
     {
-        let cache = TREE_CACHE.lock().ok()?;
-        if let Some(tree) = cache.get(github_repo) {
-            return Some(tree.clone());
+        let mut cache = TREE_CACHE.lock().ok()?;
+        // Drop anything past its TTL while we hold the lock — cheap, and it
+        // keeps the map from growing with repos nobody looks at any more.
+        cache.retain(|_, entry| entry.fetched_at.elapsed() < TREE_TTL);
+        if let Some(entry) = cache.get(github_repo) {
+            return Some(entry.index.clone());
         }
     }
 
@@ -168,7 +221,24 @@ async fn get_or_fetch_tree(
     // Cache it
     {
         if let Ok(mut cache) = TREE_CACHE.lock() {
-            cache.insert(github_repo.to_string(), index.clone());
+            if cache.len() >= TREE_CACHE_MAX_REPOS {
+                // Evict the oldest rather than clearing everything, so one new
+                // repo doesn't cost every active session its cache.
+                if let Some(oldest) = cache
+                    .iter()
+                    .min_by_key(|(_, e)| e.fetched_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    cache.remove(&oldest);
+                }
+            }
+            cache.insert(
+                github_repo.to_string(),
+                CachedTree {
+                    fetched_at: std::time::Instant::now(),
+                    index: index.clone(),
+                },
+            );
         }
     }
 
