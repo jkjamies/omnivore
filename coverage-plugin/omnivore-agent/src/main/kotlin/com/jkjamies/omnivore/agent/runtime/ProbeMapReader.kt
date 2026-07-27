@@ -11,6 +11,7 @@ import java.io.FileInputStream
 object ProbeMapReader {
 
     private const val MAGIC = "OMNIPROB"
+    private const val SUPPORTED_VERSION = 3
 
     fun read(file: File): ProbeMap {
         val probeMap = ProbeMap()
@@ -21,7 +22,20 @@ object ProbeMapReader {
             check(String(magic) == MAGIC) { "Invalid probe map file: bad magic" }
 
             val version = input.readShort().toInt()
-            check(version in 1..2) { "Unsupported version: $version" }
+            // v1/v2 are rejected, not upgraded. In v3 branch probes moved onto
+            // control-flow edges, so probe indices mean something different;
+            // reading an old file against new execution data would silently
+            // attribute coverage to the wrong lines. Failing loudly sends the
+            // user to a clean build, which is the correct fix.
+            check(version == SUPPORTED_VERSION) {
+                if (version in 1 until SUPPORTED_VERSION) {
+                    "Probe map ${file.name} was written by an older Omnivore " +
+                        "(format v$version, expected v$SUPPORTED_VERSION). Branch probe layout " +
+                        "changed; run a clean build to regenerate coverage data."
+                } else {
+                    "Unsupported probe map version: $version"
+                }
+            }
 
             val classCount = input.readInt()
 
@@ -39,9 +53,12 @@ object ProbeMapReader {
                     val methodName = input.readUTF()
                     val methodDesc = input.readUTF()
                     val type = ProbeType.entries[input.readByte().toInt()]
-                    val isComposable = if (version >= 2) input.readByte().toInt() == 1 else false
+                    val isComposable = input.readByte().toInt() == 1
+                    val branchGroup = input.readInt()
 
-                    classMap.addProbe(probeIndex, lineNumber, methodName, methodDesc, type, isComposable)
+                    classMap.addProbe(
+                        probeIndex, lineNumber, methodName, methodDesc, type, isComposable, branchGroup
+                    )
                 }
             }
         }

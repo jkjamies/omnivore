@@ -22,14 +22,39 @@ class ExecutionDataStore {
      * Called during instrumentation to create the probe storage.
      */
     fun getOrCreateProbes(classId: Long, className: String, probeCount: Int): BooleanArray {
-        val data = probes.computeIfAbsent(classId) {
-            ProbeData(
-                classId = classId,
-                className = className,
-                probes = BooleanArray(probeCount)
-            )
+        val data = probes.compute(classId) { _, existing ->
+            when {
+                existing == null -> ProbeData(classId, className, BooleanArray(probeCount))
+
+                // A second registration asking for more probes than the array
+                // has means two differently-instrumented versions of the same
+                // class are live: a stale class file on the classpath, or the
+                // same class loaded by two classloaders. Class IDs are derived
+                // from the name, so both land on this entry.
+                //
+                // Returning the smaller array (the old behaviour) meant the
+                // newer class wrote past its end and threw
+                // ArrayIndexOutOfBoundsException *inside the code under test* —
+                // a coverage tool must never be able to crash the program it is
+                // measuring. So grow instead, carrying existing hits across.
+                //
+                // Note the tradeoff this accepts: the earlier class already
+                // holds a reference to the old array in its $omnivoreProbes
+                // field, so its *subsequent* probe writes land somewhere no
+                // longer reachable from the store and are lost. Coverage for one
+                // of the two versions is unavoidably wrong here; losing some
+                // data is strictly better than an exception, and the report task
+                // warns about the count mismatch it will see downstream.
+                existing.probes.size < probeCount -> {
+                    val grown = BooleanArray(probeCount)
+                    existing.probes.copyInto(grown)
+                    ProbeData(classId, className, grown)
+                }
+
+                else -> existing
+            }
         }
-        return data.probes
+        return data!!.probes
     }
 
     /**

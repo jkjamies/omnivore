@@ -41,8 +41,18 @@ class ClassProbeMap(
     private val probeEntries = mutableListOf<ProbeEntry>()
 
     @Synchronized
-    fun addProbe(probeIndex: Int, lineNumber: Int, methodName: String, methodDesc: String, type: ProbeType, isComposable: Boolean = false) {
-        probeEntries.add(ProbeEntry(probeIndex, lineNumber, methodName, methodDesc, type, isComposable))
+    fun addProbe(
+        probeIndex: Int,
+        lineNumber: Int,
+        methodName: String,
+        methodDesc: String,
+        type: ProbeType,
+        isComposable: Boolean = false,
+        branchGroup: Int = ProbeEntry.NO_BRANCH,
+    ) {
+        probeEntries.add(
+            ProbeEntry(probeIndex, lineNumber, methodName, methodDesc, type, isComposable, branchGroup)
+        )
     }
 
     @Synchronized
@@ -80,7 +90,20 @@ data class ProbeEntry(
     val methodDesc: String,
     val type: ProbeType,
     val isComposable: Boolean = false,
-)
+    /**
+     * Which decision point this probe belongs to, scoped to the method.
+     *
+     * Branch probes come in groups — two for an `if`, N+1 for a `switch` — and
+     * the group lets the reporter distinguish "one `if` with both edges taken"
+     * from "two unrelated branches", which is what makes per-decision reporting
+     * possible. [NO_BRANCH] for line probes.
+     */
+    val branchGroup: Int = NO_BRANCH,
+) {
+    companion object {
+        const val NO_BRANCH = -1
+    }
+}
 
 enum class ProbeType {
     LINE,

@@ -136,6 +136,7 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=jacoco&project
 - **`dashboard.yml`** — dashboard changes: build, test, `docker build`, and a health smoke test
 - **`plugin.yml`** — plugin changes: Gradle build + agent/plugin unit tests
 - **`coverage.yml`** — push to `main` + PRs: build kmp-test-rig, generate report, upload to dashboard
+- **`android.yml`** — plugin or android-test-rig changes: runs the AGP build-time transform under real AGP (no emulator) and fails if it produced no probe map. This is the only job that executes `OmnivoreClassVisitorFactory`; `plugin.yml` merely compiles it.
 - **`publish.yml`** — `v*` tags: publish agent + plugin to Maven Central (OSSRH) + Gradle Plugin Portal
 - See `coverage-plugin/PUBLISHING-REQUIRED.md` for one-time setup checklist
 
