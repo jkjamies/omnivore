@@ -88,10 +88,27 @@ jobs:
       #
       # Tracked in docs/CODEBASE-REVIEW.md, Part 4.
       - name: Run unit tests and generate a report (advisory — see note)
+        id: android_unit_tests
         working-directory: test-rigs/android-test-rig
         timeout-minutes: 12
         continue-on-error: true
         run: ./gradlew testDebugUnitTest omnivoreReport --stacktrace
+
+      # `continue-on-error` makes GitHub report the step's *conclusion* as
+      # success, so without this the hang is invisible in the UI — the whole
+      # point of keeping the step was to stay informed by it. `outcome` holds
+      # the real result, so surface it as an annotation on the run.
+      - name: Surface the advisory result
+        if: always()
+        run: |
+          if [ "${{ steps.android_unit_tests.outcome }}" = "failure" ]; then
+            echo "::warning title=Android rig unit tests still not finishing::\
+          Timed out after 12 minutes. Known open defect — see docs/CODEBASE-REVIEW.md Part 4."
+          else
+            echo "::notice title=Android rig unit tests completed::\
+          This step has been failing; if it now passes consistently, drop the \
+          timeout/continue-on-error from android.yml and update CODEBASE-REVIEW.md Part 4."
+          fi
 
       - name: Upload artifacts
         if: always()
