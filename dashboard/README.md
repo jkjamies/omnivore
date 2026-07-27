@@ -37,6 +37,10 @@ All configuration is via environment variables:
 | `OMNIVORE_CORS_ORIGINS` | *(same-origin)* | Comma-separated allowed origins, or `*` for any |
 | `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum accepted ingest body (32 MiB) |
 | `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a project's ratchet floor |
+| `OMNIVORE_SECRET_KEY` | — | Encrypts session GitHub tokens at rest, and signs CSRF tokens so they survive a restart |
+| `OMNIVORE_REQUIRE_LOGIN_TO_VIEW` | `false` | Require a login to browse coverage, not just to change it |
+| `OMNIVORE_ALLOW_PROJECT_AUTOCREATE` | `true` | Let ingest create a project it has not seen before |
+| `OMNIVORE_INGEST_RATE_LIMIT` | `60` | Ingest requests per minute per client (0 disables) |
 | `OMNIVORE_STATIC_DIR` | *(compile-time)* | Path to static assets directory (set in Docker) |
 
 ## Security model
@@ -73,11 +77,31 @@ deleting the last key from silently reopening the instance.
 auth cookies are issued with the `Secure` flag, or set `OMNIVORE_COOKIE_SECURE`
 explicitly. Session cookies are `HttpOnly` and `SameSite=Lax`.
 
-**GitHub tokens.** Session tokens are stored in SQLite in plaintext, so the
-database file is a credential store — restrict its permissions and back it up
-accordingly. Keep `OMNIVORE_GITHUB_SCOPES` as narrow as your use requires;
-adding `repo` grants read *and write* on every private repository the user can
-reach.
+**GitHub tokens.** Set `OMNIVORE_SECRET_KEY` to encrypt session tokens at rest
+(ChaCha20-Poly1305). Without it they are stored in plaintext and the database
+file is a credential store. Encryption is backwards compatible in both
+directions: rows written before you set a key keep working, and setting one does
+not log anyone out. Changing or losing the key invalidates existing sessions —
+users simply log in again.
+
+Keep `OMNIVORE_GITHUB_SCOPES` as narrow as your use requires; adding `repo`
+grants read *and write* on every private repository the user can reach.
+
+**Startup banner.** The server logs its effective posture on every boot — who
+can read, who can write, and whether tokens are encrypted. Check it after any
+configuration change.
+
+**Hardening checklist for an exposed instance:**
+
+```sh
+OMNIVORE_REQUIRE_API_KEY=true          # no anonymous uploads, ever
+OMNIVORE_ALLOW_PROJECT_AUTOCREATE=false # projects must be created deliberately
+OMNIVORE_REQUIRE_LOGIN_TO_VIEW=true    # coverage is not world-readable
+OMNIVORE_SECRET_KEY=...                # encrypt session tokens
+OMNIVORE_ADMIN_USERS=you               # someone must be able to administer it
+GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=...
+OMNIVORE_DASHBOARD_URL=https://...     # implies Secure cookies
+```
 
 ## API Endpoints
 

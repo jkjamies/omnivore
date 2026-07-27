@@ -48,10 +48,25 @@ pub struct IngestParams {
 /// The GitHub token can be provided via `X-GitHub-Token` header or the server's `GITHUB_TOKEN` env var.
 pub async fn ingest_coverage(
     State(db): State<Database>,
+    // Read the peer address out of extensions rather than extracting
+    // ConnectInfo directly: it is only populated when the server runs with
+    // `into_make_service_with_connect_info`, and requiring it would make the
+    // handler unusable from tests that drive the router directly.
+    extensions: axum::http::Extensions,
     headers: axum::http::HeaderMap,
     Query(params): Query<IngestParams>,
     body: String,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
+    // Bound how fast a single client can create projects and snapshots. In open
+    // mode this endpoint is unauthenticated, so without a limit it is unbounded
+    // row creation from anyone who can reach the port.
+    let peer_ip = extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|axum::extract::ConnectInfo(addr)| addr.ip());
+    crate::routes::rate_limit::check(&crate::routes::rate_limit::client_key(
+        &headers, peer_ip,
+    ))?;
+
     let validated_key = crate::routes::api_auth::authenticate_write(&db, &headers).await?;
 
     let format = match &params.format {

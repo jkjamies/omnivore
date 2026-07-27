@@ -14,8 +14,22 @@ async fn test_db() -> Database {
 /// Helper: make a request and return (status, body bytes).
 async fn send(
     db: Database,
-    req: Request<Body>,
+    mut req: Request<Body>,
 ) -> (hyper::StatusCode, Vec<u8>) {
+    // Ingest is rate-limited per client, and a request with no peer address and
+    // no `X-Forwarded-For` is keyed as "unknown" — so every test in this file
+    // would share a single bucket. The suite already makes tens of ingest calls
+    // inside one window; a few more and it would start collecting 429s, which
+    // read as a coverage defect rather than as a limiter artifact.
+    //
+    // Give each request its own identity unless a test set one deliberately.
+    if !req.headers().contains_key("x-forwarded-for") {
+        static NEXT_CLIENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT_CLIENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        req.headers_mut()
+            .insert("x-forwarded-for", format!("test-client-{n}").parse().unwrap());
+    }
+
     let app = build_router(db);
     let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
@@ -710,13 +724,6 @@ async fn retention_prunes_old_snapshots() {
     // The 2 oldest remaining should have files_json = None (summary-only)
     let without_files: Vec<_> = all.iter().filter(|s| s.files_json.is_none()).collect();
     assert_eq!(without_files.len(), 2, "Expected 2 summary-only snapshots, got {}", without_files.len());
-
-    // Clean up env vars
-    // SAFETY: test runs single-threaded for this env manipulation
-    unsafe {
-        std::env::remove_var("OMNIVORE_RETENTION_FULL");
-        std::env::remove_var("OMNIVORE_RETENTION_SUMMARY");
-    }
 }
 
 // ── Security regressions ────────────────────────────────────────────────
@@ -1245,4 +1252,122 @@ async fn trend_returns_a_single_series() {
         points.iter().all(|p| p["target"] == "JVM_UNIT" && p["source"] == "omnivore-agent"),
         "trend mixed series"
     );
+}
+
+/// Auto-create is convenient by default but must be closable.
+#[tokio::test]
+async fn project_autocreate_can_be_disabled() {
+    // Pin the setting on this Database rather than in the environment. Setting
+    // it process-wide made every other test that was mid-ingest at that instant
+    // fail intermittently, since they all read the same variable.
+    let db = test_db().await.with_project_autocreate(false);
+
+    let status = ingest(&db, report_with("unknown-project", "X", "a/B.kt")).await;
+    assert_eq!(status, 500, "ingest to an unknown project should be refused");
+
+    let req = Request::get("/api/v1/projects").body(Body::empty()).unwrap();
+    let (_, body) = send(db, req).await;
+    assert_eq!(
+        json_body(&body).as_array().unwrap().len(),
+        0,
+        "no project should have been created"
+    );
+}
+
+/// malformed omnivore report.
+#[tokio::test]
+async fn unknown_json_is_reported_as_unknown_format() {
+    let db = test_db().await;
+    let req = Request::post("/api/v1/ingest/coverage")
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"some":"unrelated","json":true}"#))
+        .unwrap();
+    let (status, body) = send(db, req).await;
+    assert_eq!(status, 400);
+    let message = String::from_utf8_lossy(&body);
+    assert!(
+        message.contains("detect format"),
+        "expected a format-detection error, got: {message}"
+    );
+}
+
+/// A project ID with quotes must not corrupt the download header.
+#[tokio::test]
+async fn export_filename_is_sanitized() {
+    let db = test_db().await;
+    assert_eq!(
+        ingest(&db, report_with("weird\"id", "Weird", "a/B.kt")).await,
+        201
+    );
+
+    let req = Request::get("/projects/weird%22id/export/report?format=json")
+        .body(Body::empty())
+        .unwrap();
+    let app = build_router(db);
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let disposition = resp
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        !disposition.contains("weird\"id"),
+        "unsanitized project id reached the header: {disposition}"
+    );
+}
+
+// ── Resource-exhaustion regressions ─────────────────────────────────────
+
+/// A stored line number decides how much work a *later* request does.
+///
+/// The file coverage page renders one row per line from 1 up to the highest
+/// line it has coverage for, so a single record claiming line 2,000,000,000
+/// turned every subsequent view of that page into an attempt to allocate two
+/// billion rows. Ingest is unauthenticated on a default install and the record
+/// persists, so one small upload was a durable denial of service against
+/// whoever opened the page next — including an admin.
+#[tokio::test]
+async fn implausible_line_numbers_are_dropped_at_ingest() {
+    let db = test_db().await;
+
+    let body = serde_json::json!({
+        "version": "0.1.0",
+        "format": "omnivore",
+        "project": {
+            "id": "line-bomb", "name": "Line Bomb",
+            "commitSha": "abc", "branch": "main", "target": "JVM_UNIT"
+        },
+        "coverage": {
+            "lineRate": 1.0, "branchRate": 0.0,
+            "linesCovered": 1, "linesTotal": 1,
+            "branchesCovered": 0, "branchesTotal": 0
+        },
+        "files": [{
+            "path": "src/Main.kt",
+            "lineRate": 1.0,
+            "branchRate": 0.0,
+            "lines": [
+                {"lineNumber": 7, "hitCount": 1},
+                {"lineNumber": 2000000000, "hitCount": 1},
+                {"lineNumber": 0, "hitCount": 1},
+                {"lineNumber": -5, "hitCount": 1}
+            ]
+        }]
+    })
+    .to_string();
+
+    // The upload still succeeds — a broken producer keeps the coverage it got
+    // right — but the impossible records do not reach storage.
+    assert_eq!(ingest(&db, body).await, 201);
+
+    let (status, page) = get_text(&db, "/projects/line-bomb/files/src/Main.kt").await;
+    assert_eq!(status, 200);
+    assert!(
+        !page.contains("2000000000"),
+        "an implausible line number reached the rendered page"
+    );
+    // Line 7 is real, so the page still goes up to it.
+    assert!(page.contains(">7<"), "the plausible line should still render");
 }

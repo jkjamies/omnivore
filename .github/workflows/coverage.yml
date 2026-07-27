@@ -29,20 +29,45 @@ jobs:
       - name: Upload coverage to dashboard (main branch)
         if: github.ref == 'refs/heads/main' && vars.OMNIVORE_DASHBOARD_URL != ''
         working-directory: test-rigs/kmp-test-rig
+        env:
+          DASHBOARD_URL: ${{ vars.OMNIVORE_DASHBOARD_URL }}
         run: |
-          curl -s -X POST \
-            "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage" \
+          curl -sS --fail-with-body -X POST \
+            "$DASHBOARD_URL/api/v1/ingest/coverage" \
             -H "Content-Type: application/json" \
             -d @build/reports/omnivore/omnivore-report.json
 
       - name: Upload coverage with PR comment
         if: github.event_name == 'pull_request' && vars.OMNIVORE_DASHBOARD_URL != ''
         working-directory: test-rigs/kmp-test-rig
+        env:
+          DASHBOARD_URL: ${{ vars.OMNIVORE_DASHBOARD_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          curl -s -X POST \
-            "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}&base_branch=main" \
+          # The workflow token is sent to this URL, and OMNIVORE_DASHBOARD_URL
+          # is a repository *variable* — a weaker permission to edit than a
+          # secret. Require HTTPS and, when OMNIVORE_DASHBOARD_HOST is set,
+          # pin the host, so nobody can redirect the token by editing a
+          # variable.
+          case "$DASHBOARD_URL" in
+            https://*) ;;
+            *) echo "::error::OMNIVORE_DASHBOARD_URL must be https:// to receive the workflow token"; exit 1 ;;
+          esac
+          EXPECTED_HOST="${{ vars.OMNIVORE_DASHBOARD_HOST }}"
+          if [ -n "$EXPECTED_HOST" ]; then
+            ACTUAL_HOST=$(printf '%s' "$DASHBOARD_URL" | sed -E 's#^https://([^/]+).*#\1#')
+            if [ "$ACTUAL_HOST" != "$EXPECTED_HOST" ]; then
+              echo "::error::Dashboard host '$ACTUAL_HOST' does not match pinned '$EXPECTED_HOST'"
+              exit 1
+            fi
+          fi
+
+          curl -sS --fail-with-body -X POST \
+            "$DASHBOARD_URL/api/v1/ingest/coverage?github_repo=$REPO&pr_number=$PR_NUMBER&base_branch=main" \
             -H "Content-Type: application/json" \
-            -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Token: $GH_TOKEN" \
             -d @build/reports/omnivore/omnivore-report.json
 
       - name: Upload coverage report artifact

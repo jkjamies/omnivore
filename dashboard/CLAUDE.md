@@ -30,6 +30,16 @@ the Dockerfile applies it to build the sqlx check database, and CI does the
 same. Guarded `ALTER TABLE` migrations for older deployments stay in
 `run_migrations`; **a new column must be added in both places.**
 
+**Tests must not set process environment variables.** `cargo test` runs
+`#[tokio::test]`s concurrently in one process, and the request handlers read
+configuration from the environment, so a test that flips a variable changes
+behaviour for every test in flight at that moment. That produced a suite that
+failed roughly one run in ten. Where a test needs a non-default setting, plumb
+it through the type instead — `Database::with_project_autocreate` is the
+pattern. `routes/rate_limit.rs` is the exception: its own unit tests do
+manipulate `OMNIVORE_INGEST_RATE_LIMIT`, serialized behind an `ENV_LOCK`,
+because the value under test *is* the variable.
+
 Binary name: `omnivore-dashboard`
 License: **Apache-2.0**
 
@@ -148,6 +158,16 @@ All parsers normalize to `(OmnivoreReport, CoverageSnapshot)` — a common model
 | Go coverprofile | `parsers::go_coverprofile` | `go test -coverprofile` output | Go projects (native format, no conversion) |
 | Python coverage.py | `parsers::python_coverage` | `coverage json` output | Python projects (native format, no conversion) |
 | JaCoCo/Kover XML | `parsers::jacoco_xml` | JaCoCo `report.xml` / Kover `koverXmlReport` | Kotlin/Android/JVM projects using JaCoCo or Kover instead of the Omnivore agent |
+
+**Line numbers are bounded at ingest.** `CoverageSnapshot::from_report` takes
+`&mut OmnivoreReport` and drops records outside `1..=MAX_LINE_NUMBER`
+(2,000,000) before serializing `files_json`. It is `&mut` on purpose: it is the
+one function every parser funnels through, so a new format cannot forget. The
+file coverage page renders a row per line up to the highest line it sees, so an
+unbounded line number was a stored denial of service against whoever opened the
+page next — see `docs/CODEBASE-REVIEW.md` §3b.2. Go coverprofile additionally
+rejects implausible *block ranges*, because it is the only format where one
+record expands into many.
 
 For every format except omnivore JSON, project metadata (id, name, commit, branch) is supplied via the shared `parsers::IngestMeta` struct (mapped from query params in the API). Each parser normalizes through `CoverageSnapshot::from_report`, which persists the `target` in canonical `SCREAMING_SNAKE_CASE` and records the `source` (provenance).
 

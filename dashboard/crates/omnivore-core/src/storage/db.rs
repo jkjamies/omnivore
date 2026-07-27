@@ -23,6 +23,18 @@ pub struct RatchetResult {
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
+    /// Resolved once at construction rather than read from the environment on
+    /// every ingest.
+    ///
+    /// Reading it per call made the setting process-global *state*, which meant
+    /// a test could not exercise the closed mode without changing behaviour for
+    /// every other test running at the same moment — and that is exactly what
+    /// happened: `project_autocreate_can_be_disabled` set the variable while
+    /// ~40 concurrent `#[tokio::test]`s were ingesting, so an unrelated test
+    /// occasionally got a refusal it never asked for. A suite that fails
+    /// roughly one run in ten teaches people to press re-run, which is worse
+    /// than no suite.
+    allow_project_autocreate: bool,
 }
 
 impl Database {
@@ -48,9 +60,22 @@ impl Database {
             .connect_with(options)
             .await?;
 
-        let db = Self { pool };
+        let db = Self {
+            pool,
+            allow_project_autocreate: auto_create_projects(),
+        };
         db.run_migrations().await?;
         Ok(db)
+    }
+
+    /// Override whether ingest may create unseen projects.
+    ///
+    /// The environment decides this for a real server; this exists so a test
+    /// can pin the setting on one `Database` without mutating process state
+    /// that every other concurrently-running test also reads.
+    pub fn with_project_autocreate(mut self, allowed: bool) -> Self {
+        self.allow_project_autocreate = allowed;
+        self
     }
 
     /// Table creation DDL, shared with the build-time sqlx database.
@@ -1029,7 +1054,22 @@ impl Database {
 
     // -- Source cache --
 
+    /// How long cached source stays servable when it was fetched without a
+    /// pinned commit.
+    ///
+    /// An entry keyed by a real commit SHA is immutable and never needs to
+    /// expire. An entry keyed by the empty ref was fetched from a moving
+    /// branch head, so it goes stale the moment anyone pushes — and, with no
+    /// expiry at all, the file view showed whatever was fetched first for the
+    /// life of the database.
+    const FLOATING_SOURCE_TTL_SECONDS: i64 = 60 * 60;
+
     /// Look up cached source content.
+    ///
+    /// Entries fetched against a floating ref are ignored once older than
+    /// [`Self::FLOATING_SOURCE_TTL_SECONDS`], so the caller re-fetches instead
+    /// of rendering stale source against current coverage line numbers — a
+    /// mismatch that shows covered/uncovered marks against the wrong lines.
     pub async fn get_cached_source(
         &self,
         repo: &str,
@@ -1037,14 +1077,56 @@ impl Database {
         commit_ref: &str,
     ) -> Result<Option<String>, sqlx::Error> {
         let ref_key = if commit_ref.is_empty() { "" } else { commit_ref };
-        sqlx::query_scalar::<_, String>(
-            "SELECT content FROM source_cache WHERE repo = ? AND path = ? AND commit_ref = ?",
+
+        let row = sqlx::query_as::<_, (String, String)>(
+            "SELECT content, fetched_at FROM source_cache
+             WHERE repo = ? AND path = ? AND commit_ref = ?",
         )
         .bind(repo)
         .bind(path)
         .bind(ref_key)
         .fetch_optional(&self.pool)
-        .await
+        .await?;
+
+        let Some((content, fetched_at)) = row else {
+            return Ok(None);
+        };
+
+        if !ref_key.is_empty() {
+            // Pinned to an immutable commit — always fresh.
+            return Ok(Some(content));
+        }
+
+        let is_fresh = DateTime::parse_from_rfc3339(&fetched_at)
+            .map(|t| {
+                (Utc::now() - t.with_timezone(&Utc)).num_seconds()
+                    < Self::FLOATING_SOURCE_TTL_SECONDS
+            })
+            // An unparseable timestamp predates this check; treat it as stale
+            // and re-fetch rather than serving something of unknown age.
+            .unwrap_or(false);
+
+        Ok(if is_fresh { Some(content) } else { None })
+    }
+
+    /// Delete cached source that can no longer be served.
+    ///
+    /// Source blobs are by far the largest thing in the database, and nothing
+    /// used to remove them — a dashboard accumulated every file anyone had ever
+    /// viewed, forever.
+    pub async fn prune_source_cache(&self) -> Result<u64, sqlx::Error> {
+        let cutoff = (Utc::now()
+            - chrono::Duration::seconds(Self::FLOATING_SOURCE_TTL_SECONDS))
+        .to_rfc3339();
+
+        let result = sqlx::query(
+            "DELETE FROM source_cache WHERE commit_ref = '' AND fetched_at < ?",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 
     /// Store source content in cache.
@@ -1080,6 +1162,17 @@ impl Database {
     ) -> Result<RatchetResult, sqlx::Error> {
         // Ensure project exists
         if self.get_project(&snapshot.project_id).await?.is_none() {
+            if !self.allow_project_autocreate {
+                // Closed mode: a project must be created deliberately before
+                // it can receive coverage. Otherwise any caller who reaches
+                // ingest can mint rows for arbitrary project IDs — a typo in a
+                // CI config silently creates a second project rather than
+                // failing, and an open instance accumulates junk indefinitely.
+                return Err(sqlx::Error::Protocol(format!(
+                    "Project '{}' does not exist and OMNIVORE_ALLOW_PROJECT_AUTOCREATE is disabled",
+                    snapshot.project_id
+                )));
+            }
             let input = CreateProject {
                 id: snapshot.project_id.clone(),
                 name: project_name
@@ -1253,7 +1346,9 @@ impl Database {
         )
         .bind(&id)
         .bind(github_username)
-        .bind(github_token)
+        // Encrypted when OMNIVORE_SECRET_KEY is configured; stored as-is
+        // otherwise, so upgrading does not require the operator to act first.
+        .bind(crate::crypto::encrypt(github_token))
         .bind(avatar_url)
         .bind(now.to_rfc3339())
         .bind(expires_at.to_rfc3339())
@@ -1270,6 +1365,13 @@ impl Database {
         })
     }
 
+    /// Look up a live session, decrypting its stored GitHub token.
+    ///
+    /// A session whose token cannot be decrypted is treated as absent rather
+    /// than surfaced with a broken token: that happens when
+    /// `OMNIVORE_SECRET_KEY` is missing or has changed, and the right outcome is
+    /// to send the user back through login rather than to make GitHub calls
+    /// with garbage.
     pub async fn get_session(&self, session_id: &str) -> Result<Option<Session>, sqlx::Error> {
         let now = Utc::now().to_rfc3339();
         let session = sqlx::query_as!(
@@ -1288,7 +1390,24 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(session)
+        let Some(mut session) = session else {
+            return Ok(None);
+        };
+
+        match crate::crypto::decrypt(&session.github_token) {
+            Ok(token) => {
+                session.github_token = token;
+                Ok(Some(session))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    username = %session.github_username,
+                    "Discarding session with unreadable token"
+                );
+                Ok(None)
+            }
+        }
     }
 
     pub async fn delete_session(&self, session_id: &str) -> Result<(), sqlx::Error> {
@@ -1356,6 +1475,21 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+/// Whether ingest may create a project it has not seen before.
+///
+/// Defaults to on, which is what makes first-run setup a single `curl`. Set
+/// `OMNIVORE_ALLOW_PROJECT_AUTOCREATE=false` on a shared or exposed instance so
+/// coverage can only be uploaded to projects someone created deliberately.
+fn auto_create_projects() -> bool {
+    match std::env::var("OMNIVORE_ALLOW_PROJECT_AUTOCREATE") {
+        Ok(v) if !v.trim().is_empty() => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        _ => true,
     }
 }
 

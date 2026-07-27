@@ -591,7 +591,7 @@ abstract class OmnivoreReportTask : DefaultTask() {
         out.style(Style.Normal).text("░".repeat(empty))
     }
 
-    private fun fmt(pct: Double): String = "%5.1f%%".format(pct)
+    private fun fmt(pct: Double): String = String.format(java.util.Locale.ROOT, "%5.1f%%", pct)
 
     private fun styleFor(pct: Double, thresholds: Thresholds): Style = when {
         pct >= thresholds.green -> Style.SuccessHeader   // green

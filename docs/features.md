@@ -35,7 +35,17 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Project permissions from GitHub repo roles | Built |
 | Per-user source fetching (no shared server token) | Built |
 | Embeddable SVG trend charts (`/embed/{project_id}/trend`) | Built |
-| Coverage ratchet (auto-advancing floor per project) | Built |
+| Coverage ratchet (auto-advancing floor per project, main-line branches only) | Built |
+| Edge-based branch coverage (both outcomes of every condition, plus switch arms) | Built |
+| Per-series coverage API (`?target=`/`?source=`, `/series` discovery) | Built |
+| Instrumentation diagnostics (why classes were skipped, printed by `omnivoreReport`) | Built |
+| Ingest rate limiting (`OMNIVORE_INGEST_RATE_LIMIT`) | Built |
+| Optional login-to-view (`OMNIVORE_REQUIRE_LOGIN_TO_VIEW`) | Built |
+| Session token encryption at rest (`OMNIVORE_SECRET_KEY`) | Built |
+| CSRF protection on settings forms | Built |
+| Configurable CORS allowlist, CSP and security headers | Built |
+| Background maintenance (expired sessions, permission cache, stale source blobs) | Built |
+| Startup security-posture banner | Built |
 
 ## Pro
 
@@ -47,7 +57,7 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Export reports — two-snapshot comparison | Built |
 | Dependency graph visualization (D3.js, Gradle projects) | Built |
 | API keys + token-based upload auth | Built |
-| Admin role separation (org-based or repo-based) | Built |
+| Admin role separation (explicit allowlist or GitHub org owners) | Built |
 | Configurable retention limits | Planned |
 | Project favoriting / pinning (server-persisted per-user, tentative) | Planned |
 | PR coverage gates (block merges when coverage drops, via GitHub Action) | Planned |
@@ -67,3 +77,26 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | PR-level AI test review (AI suggestions in GitHub PR comments) | Planned |
 | Multi-instance / HA deployment support (Postgres backend) | Planned |
 | Priority support + SLA | Planned |
+
+## Security-relevant defaults
+
+Both access controls default to **open**, and they are independent of each
+other. This is deliberate — it is what makes a five-minute local trial possible
+— but it means "we deployed it" is not the same as "we secured it".
+
+| Control | Default | Closed by |
+|---|---|---|
+| Reading (browse coverage) | Open | `GITHUB_CLIENT_ID`/`SECRET` + `OMNIVORE_REQUIRE_LOGIN_TO_VIEW=true` |
+| Writing (upload coverage) | Open until the first API key exists | `OMNIVORE_REQUIRE_API_KEY=true` |
+| Project creation | Automatic on first upload | `OMNIVORE_ALLOW_PROJECT_AUTOCREATE=false` |
+| Session token storage | Plaintext | `OMNIVORE_SECRET_KEY` |
+| Dashboard admin | Nobody | `OMNIVORE_ADMIN_USERS` or `OMNIVORE_GITHUB_ORG` |
+
+The server logs its effective posture on every boot. See
+`dashboard/README.md#security-model` for the full model and a hardening
+checklist.
+
+Note that project-level permissions derive from the linked GitHub repository,
+so a feature that lets an unauthenticated caller set `github_repo` is a
+privilege-escalation path, not a convenience. Keep that in mind when extending
+the write API.
