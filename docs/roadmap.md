@@ -53,6 +53,16 @@ Not tier-assigned yet; listed here so they aren't lost in the backlog.
 - [ ] **Verification harness** — differential testing against JaCoCo over a real
       corpus. The review found several defects that produced entirely plausible
       numbers; nothing but an oracle catches that class of bug.
+- [ ] **Harden the release path** — `publish.yml` publishes any `v*` tag with
+      the project's signing key, with no check that the tag is on `main` and no
+      environment gate. **Do this before the first tag**: it costs nothing while
+      no release ritual exists, and the first tag is when the key is first used
+      in anger. See [PRODUCT-STRATEGY.md §9](PRODUCT-STRATEGY.md).
+- [ ] **Spend the pre-release window** — no published artifact means the probe
+      format, report schema, REST API, plugin DSL, and DB schema are all still
+      free to reshape. The agent question below and the `files_json` rework are
+      the two items most damaged by deferring past `v0.1.0`. §9 has the list and
+      a sequencing.
 - [ ] **Decide the agent question** — keep the custom JVM agent, or replace it
       with a Compose-aware filter over Kover XML. Hinges on whether per-test
       coverage is genuinely on the roadmap.

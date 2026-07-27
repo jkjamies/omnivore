@@ -414,9 +414,91 @@ multi-format, Compose-aware. The path to compelling is short and specific:
 4. Decide the **agent question** in §2 deliberately rather than by inertia
 5. Build the **verification harness** that makes the numbers defensible
 
+All of which sit inside a window that closes at the first `v*` tag — see §9.
+
 The largest risk is not competitors. It is shipping numbers that are quietly
 wrong — which has already happened once, and was invisible until someone read
 the code.
+
+---
+
+## 9. The pre-release window
+
+Nothing has been published and there are no external consumers. That is a
+temporary asset, and it is worth spending deliberately rather than letting it
+expire. Everything in this section is cheap today and expensive after the first
+`v*` tag.
+
+### Harden the release path before the first tag — do this first
+
+`publish.yml` fires on **any** `v*` tag and publishes to Maven Central (OSSRH)
+and the Gradle Plugin Portal using the project's GPG signing key. It does not
+check that the tag is reachable from `main`, and the job sits behind no GitHub
+Environment, so nothing gates it behind review. Anyone who can push a tag can
+cut a release under the project's identity.
+
+Two mitigations, either or both:
+
+- **Require the tag to be an ancestor of the default branch.** Needs
+  `fetch-depth: 0` on checkout so the ancestry is actually knowable.
+- **Put the publish job behind `environment:`** with required reviewers.
+  Referencing an environment that does not exist creates it unprotected, so
+  adding the line is non-breaking and gives somewhere to attach the rule later.
+
+Both change how releases are cut, which is precisely why they cost nothing now
+and will be an irritation once a release ritual exists. More to the point, the
+first tag is when the signing key gets used in anger: a compromised release
+matters far more once artifacts exist at those coordinates and something
+downstream resolves them.
+
+This is the only item in this section with a hard deadline attached to it.
+
+### Breaking changes are free until the first release
+
+Five surfaces are still unowned by anyone: the `.omnivore`/`.probes` binary
+formats, the report JSON schema, the REST API shape, the plugin DSL, and the
+database schema.
+
+The review stack already spent some of this freedom without anyone noticing —
+branch-coverage semantics changed, the probe format went to v3 and refuses to
+read v1/v2, and `/latest` and `/trend` now answer `300` for multi-series
+projects. Each would have been a migration story with users; with none, they
+were simply edits. The same applies to anything else worth reshaping.
+
+Specific candidates, in rough order of consequence:
+
+- **The agent question (§2).** The largest one. Dropping the custom agent after
+  publishing it is a deprecation with a support tail; deciding against it now is
+  just a decision. This is the item most damaged by delay.
+- **`files_json` → a `snapshot_files` table (§7).** Post-release this is a
+  migration users have to run and an upgrade note. Today it is a schema edit and
+  a rewrite of `find_file_across_targets`.
+- **Compatibility shims that currently protect nobody.** Per-file branch counts
+  carry `#[serde(default)]` so "older producers" still deserialize; there are no
+  older producers. Worth *keeping* regardless — plugin and dashboard version
+  skew is real even with a single user, since they upgrade independently — but
+  that is now a choice rather than a constraint, and it should be made on those
+  grounds.
+
+### What "no consumers" removes
+
+The upgrade-impact items from the review stack need no release notes and no
+migration guidance: the branch-percentage drop, ratchet floors calibrated on the
+old numbers reading as violated, and the API's new `300`. There is nobody to
+tell.
+
+One local consequence survives. Any dashboard fed by `coverage.yml` on `main`
+will show a step down in its own trend at merge, because the KMP rig's branch
+rate was being computed the wrong way too. Either prune those snapshots or leave
+the step as the marker for where the numbers became correct.
+
+### Sequencing
+
+1. Land the review stack.
+2. Harden `publish.yml` — before any tag exists.
+3. Decide §2, since everything about the agent's future is cheapest to change now.
+4. Make any remaining schema or API breaks worth making.
+5. Then tag `v0.1.0` and accept that the surfaces above are owned from that point.
 
 ---
 
