@@ -32,13 +32,17 @@ object GlobPattern {
 
     private const val REGEX_PREFIX = "regex:"
 
-    private val cache = java.util.concurrent.ConcurrentHashMap<String, Regex?>()
+    // An empty negative lookahead: matches nothing. Stands in for an invalid
+    // pattern because ConcurrentHashMap cannot cache null, which would mean
+    // recompiling (and logging) the bad pattern for every class.
+    private val NEVER = Regex("(?!)")
+
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
 
     /** Match [text] against [pattern]. An invalid `regex:` pattern never matches. */
-    fun matches(pattern: String, text: String): Boolean =
-        compile(pattern)?.matches(text) ?: false
+    fun matches(pattern: String, text: String): Boolean = compile(pattern).matches(text)
 
-    private fun compile(pattern: String): Regex? = cache.computeIfAbsent(pattern) {
+    private fun compile(pattern: String): Regex = cache.computeIfAbsent(pattern) {
         try {
             if (it.startsWith(REGEX_PREFIX)) {
                 Regex(it.removePrefix(REGEX_PREFIX))
@@ -47,7 +51,7 @@ object GlobPattern {
             }
         } catch (e: Exception) {
             System.err.println("[Omnivore] Ignoring invalid pattern '$it': ${e.message}")
-            null
+            NEVER
         }
     }
 

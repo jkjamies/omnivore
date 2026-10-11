@@ -40,6 +40,7 @@ All configuration is via environment variables:
 | `OMNIVORE_CORS_ORIGINS` | *(same-origin)* | Comma-separated allowed origins, or `*` |
 | `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum ingest body size (32 MiB) |
 | `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a ratchet floor |
+| `OMNIVORE_RATCHET_REQUIRE_BRANCH` | `false` | When `true`, uploads with no branch never raise a ratchet floor |
 
 ### Before exposing this beyond localhost
 
@@ -58,8 +59,9 @@ Note that coverage numbers and file paths stay world-readable even with OAuth
 on — only mutations are gated. Put an authenticating reverse proxy in front if
 that is not acceptable. See `dashboard/README.md#security-model`.
 
-The container runs as an unprivileged user (uid 10001) and writes only to
-`/data`, so bind-mounted host directories must be writable by that uid.
+The server runs as an unprivileged user (uid 10001) and writes only to
+`/data`. See [Data Persistence](#data-persistence) for how ownership of bind
+mounts is handled.
 
 Pass env vars with `-e`:
 
@@ -99,6 +101,10 @@ The SQLite database lives at `/data/omnivore.db` inside the container. **Always 
 # Bind mount (you choose the host path)
 -v /path/on/host:/data
 ```
+
+The server runs as a non-root user, **UID 10001**. On startup the container re-owns anything in `/data` that UID 10001 doesn't own, then drops root before the server starts, so bind mounts and volumes created by older root-run images work without a manual `chown`.
+
+If you start the container with `--user`, that step is skipped and the mounted directory must already be writable by the user you chose.
 
 ## Docker Compose
 

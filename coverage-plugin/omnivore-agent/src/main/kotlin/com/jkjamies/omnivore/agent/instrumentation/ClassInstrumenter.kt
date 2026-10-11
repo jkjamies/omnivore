@@ -322,10 +322,16 @@ internal fun emitProbeInitIntPush(mv: MethodVisitor, value: Int) {
  * inverted: simple classes instrumented fine, while the branch-heavy classes
  * that matter most for coverage were skipped, showing up as 0% or absent.
  *
- * Resolving against the target loader (falling back to the agent's own, then to
- * `java/lang/Object`) keeps frame computation working without ever failing the
- * transform. Edge-based branch probes add merge points, which makes getting this
- * right more load-bearing than before.
+ * Resolving against the target loader (falling back to the agent's own) keeps
+ * frame computation working. Edge-based branch probes add merge points, which
+ * makes getting this right more load-bearing than before.
+ *
+ * When a type still cannot be resolved, this throws rather than guessing. A
+ * guessed `java/lang/Object` is not safe: if the merged values share a more
+ * specific supertype that later code relies on (`invokevirtual C.m`), the
+ * verifier rejects the method and the program under test fails with a
+ * VerifyError. Throwing lets the transformer record the class as failed and
+ * load it uninstrumented — visible in the instrumentation stats, and harmless.
  */
 class LoaderAwareClassWriter(
     private val loader: ClassLoader?,
@@ -349,10 +355,11 @@ class LoaderAwareClassWriter(
                     candidate.name.replace('.', '/')
                 }
             }
-        } catch (_: Throwable) {
-            // Object is always a safe answer: it widens the frame, which the
-            // verifier accepts, where an exception would lose the class.
-            OBJECT
+        } catch (e: Throwable) {
+            // Includes LinkageError/ClassCircularityError (e.g. resolving the
+            // class currently being transformed), which the transformer's
+            // `catch (Exception)` would not see unwrapped.
+            throw TypeNotPresentException("$type1 or $type2", e)
         }
     }
 

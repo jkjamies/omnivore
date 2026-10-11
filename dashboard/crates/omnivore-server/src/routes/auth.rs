@@ -104,15 +104,20 @@ pub async fn login(State(config): State<OAuthConfig>, jar: CookieJar) -> (Cookie
         .same_site(axum_extra::extract::cookie::SameSite::Lax)
         .build();
 
-    // client_id and the scope list are operator-configured; state is hex.
-    let url = format!(
-        "https://github.com/login/oauth/authorize?client_id={}&scope={}&state={}",
-        config.client_id,
-        oauth_scopes(),
-        state,
-    );
+    // client_id and the scope list are operator-configured, so encode them
+    // rather than trusting them to be query-safe.
+    let scopes = oauth_scopes();
+    let url = reqwest::Url::parse_with_params(
+        "https://github.com/login/oauth/authorize",
+        [
+            ("client_id", config.client_id.as_str()),
+            ("scope", scopes.as_str()),
+            ("state", state.as_str()),
+        ],
+    )
+    .expect("static authorize URL parses");
 
-    (jar.add(state_cookie), Redirect::temporary(&url))
+    (jar.add(state_cookie), Redirect::temporary(url.as_str()))
 }
 
 #[derive(Deserialize)]

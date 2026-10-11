@@ -37,6 +37,7 @@ All configuration is via environment variables:
 | `OMNIVORE_CORS_ORIGINS` | *(same-origin)* | Comma-separated allowed origins, or `*` for any |
 | `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum accepted ingest body (32 MiB) |
 | `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a project's ratchet floor |
+| `OMNIVORE_RATCHET_REQUIRE_BRANCH` | `false` | When `true`, uploads with no branch never raise a project's ratchet floor |
 | `OMNIVORE_SECRET_KEY` | — | Encrypts session GitHub tokens at rest, and signs CSRF tokens so they survive a restart |
 | `OMNIVORE_REQUIRE_LOGIN_TO_VIEW` | `false` | Require a login to browse coverage, not just to change it |
 | `OMNIVORE_ALLOW_PROJECT_AUTOCREATE` | `true` | Let ingest create a project it has not seen before |
@@ -264,7 +265,15 @@ Shields.io-style SVG badge showing current coverage:
 https://your-dashboard.com/badge/{project_id}
 ```
 
-**Query params**: `?metric=line|branch` `?target=JvmUnit`
+**Query params**: `?metric=line|branch` `?target=JVM_UNIT` `?source=omnivore-agent`
+
+A project with more than one series (say, unit and instrumented tests, or the
+agent and Kover measuring the same target) must name one, or the badge reads
+"unknown":
+
+```markdown
+![Coverage](https://your-dashboard.com/badge/my-project?target=JVM_UNIT&source=omnivore-agent)
+```
 
 **Usage in Markdown**:
 ```markdown
@@ -290,10 +299,14 @@ https://your-dashboard.com/embed/{project_id}/trend
 |---|---|---|
 | `limit` | `30` | Number of data points |
 | `metric` | `line` | `line` or `branch` |
-| `target` | all | Filter by target (e.g., `JvmUnit`, `AndroidInstrumented`) |
+| `target` | — | Series target (e.g., `JVM_UNIT`, `ANDROID_INSTRUMENTED`) |
+| `source` | — | Series source (e.g., `omnivore-agent`, `kover`) |
 | `width` | `400` | Width in pixels |
 | `height` | `120` | Height in pixels |
 | `theme` | `light` | `light` or `dark` |
+
+The chart shows one series. If `target`/`source` match several, it shows the
+one uploaded to most recently; name both to pin it.
 
 **Usage in Markdown** (GitHub README, wiki):
 ```markdown

@@ -1,6 +1,7 @@
 package com.jkjamies.omnivore.gradle.tasks
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
@@ -62,10 +63,7 @@ abstract class OmnivoreUploadTask : DefaultTask() {
             .toList()
 
         if (reportFiles.isEmpty()) {
-            throw TaskExecutionException(
-                this,
-                RuntimeException("No report files found in ${dir.absolutePath}. Run omnivoreReport first.")
-            )
+            throw GradleException("No report files found in ${dir.absolutePath}. Run omnivoreReport first.")
         }
 
         val endpoint = "$url/api/v1/ingest/coverage"
@@ -73,7 +71,8 @@ abstract class OmnivoreUploadTask : DefaultTask() {
         // Coverage reports carry full source paths and, with an API key, a
         // credential. Neither belongs on a plaintext connection to anything but
         // a local dashboard.
-        if (endpoint.startsWith("http://") && !isLoopback(url)) {
+        val scheme = runCatching { URI(url).scheme }.getOrNull()
+        if (scheme.equals("http", ignoreCase = true) && !isLoopback(url)) {
             val detail = if (authToken.isPresent) " The API key would be sent in clear text." else ""
             logger.warn("Omnivore: uploading to $url over plain HTTP.$detail Use https:// for a remote dashboard.")
         }
@@ -86,7 +85,8 @@ abstract class OmnivoreUploadTask : DefaultTask() {
 
     private fun isLoopback(url: String): Boolean {
         val host = runCatching { URI(url).host }.getOrNull() ?: return false
-        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+        return host.equals("localhost", ignoreCase = true) ||
+            host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 
     private fun uploadFile(file: File, endpoint: String) {
