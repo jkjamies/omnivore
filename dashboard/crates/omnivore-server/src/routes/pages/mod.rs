@@ -318,7 +318,13 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
     let line_rate = if lines_total > 0 { lines_covered as f64 / lines_total as f64 } else { 0.0 };
     let branch_rate = if branches_total > 0 { branches_covered as f64 / branches_total as f64 } else { 0.0 };
 
-    let line_delta = if targets.iter().all(|t| t.line_delta.is_some()) {
+    let lines_are_union = have_file_data && targets.iter().all(|t| !t.files.is_empty());
+
+    // The previous composite can only be reconstructed by summing per-target
+    // totals; the previous run's per-line data isn't available to union. So
+    // when the current rate is a union, subtracting a summed rate would report
+    // movement where there was none — leave the line delta out instead.
+    let line_delta = if !lines_are_union && targets.iter().all(|t| t.line_delta.is_some()) {
         let prev_line_rate = targets.iter()
             .map(|t| {
                 let prev_covered = t.lines_covered as f64 - t.line_delta.unwrap() * t.lines_total as f64;
@@ -353,7 +359,7 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
     Some(CompositeSnapshot {
         line_rate, branch_rate, lines_covered, lines_total,
         branches_covered, branches_total, file_count, line_delta, branch_delta,
-        lines_are_union: have_file_data && targets.iter().all(|t| !t.files.is_empty()),
+        lines_are_union,
         branches_are_union: false,
     })
 }
@@ -599,6 +605,21 @@ mod tests {
         assert_eq!(composite.lines_covered, 2, "lines 1 and 2 were covered between them");
         assert_eq!(composite.file_count, 1, "one distinct file");
         assert!(composite.lines_are_union);
+    }
+
+    /// A union rate minus a summed previous rate is not a delta: with overlap
+    /// it reports change where there was none, so it is left out.
+    #[test]
+    fn composite_omits_line_delta_for_a_union() {
+        let shared = || vec![file("pkg/Shared.kt", 0, 0, &[(1, 1), (2, 0)])];
+        let mut unit = target("JVM_UNIT", shared());
+        let mut instrumented = target("ANDROID_INSTRUMENTED", shared());
+        unit.line_delta = Some(0.0);
+        instrumented.line_delta = Some(0.0);
+
+        let composite = compute_composite(&[unit, instrumented]).unwrap();
+        assert!(composite.lines_are_union);
+        assert_eq!(composite.line_delta, None);
     }
 
     /// Distinct files across targets still add up.
