@@ -2,6 +2,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use omnivore_core::storage::Database;
+
+use super::coverage::{resolve_series_or_newest, SeriesParams};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -10,8 +12,11 @@ pub struct EmbedQuery {
     limit: Option<i64>,
     /// Metric: "line" (default) or "branch"
     metric: Option<String>,
-    /// Target filter (e.g., "JvmUnit")
+    /// Series selection, as for /api/v1/coverage/{id}/trend: target
+    /// (e.g. "JVM_UNIT") and source (e.g. "kover"). When several series match,
+    /// the one uploaded to most recently is charted.
     target: Option<String>,
+    source: Option<String>,
     /// Width in pixels (default: 400)
     width: Option<f64>,
     /// Height in pixels (default: 120)
@@ -33,14 +38,15 @@ pub async fn trend_embed(
     let height = clamp_dimension(params.height, 120.0, 60.0, 2000.0);
     let dark = params.theme.as_deref() == Some("dark");
 
-    let snapshots = if let Some(target) = &params.target {
-        db.get_snapshots_for_project_by_target(&project_id, target, limit)
+    // One series only: mixing them interleaves unrelated measurements (unit
+    // vs instrumented, agent vs Kover) into a meaningless zig-zag.
+    let selection = SeriesParams { target: params.target.clone(), source: params.source.clone() };
+    let snapshots = match resolve_series_or_newest(&db, &project_id, &selection).await {
+        Some((target, source)) => db
+            .get_snapshots_for_project_by_series(&project_id, &target, &source, limit)
             .await
-            .unwrap_or_default()
-    } else {
-        db.get_snapshots_for_project(&project_id, limit)
-            .await
-            .unwrap_or_default()
+            .unwrap_or_default(),
+        None => Vec::new(),
     };
 
     let rates: Vec<f64> = snapshots

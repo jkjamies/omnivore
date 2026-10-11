@@ -241,7 +241,15 @@ Shields.io-style SVG badge showing current coverage:
 https://your-dashboard.com/badge/{project_id}
 ```
 
-**Query params**: `?metric=line|branch` `?target=JvmUnit`
+**Query params**: `?metric=line|branch` `?target=JVM_UNIT` `?source=omnivore-agent`
+
+A project with more than one series (say, unit and instrumented tests, or the
+agent and Kover measuring the same target) must name one, or the badge reads
+"unknown":
+
+```markdown
+![Coverage](https://your-dashboard.com/badge/my-project?target=JVM_UNIT&source=omnivore-agent)
+```
 
 **Usage in Markdown**:
 ```markdown
@@ -267,10 +275,14 @@ https://your-dashboard.com/embed/{project_id}/trend
 |---|---|---|
 | `limit` | `30` | Number of data points |
 | `metric` | `line` | `line` or `branch` |
-| `target` | all | Filter by target (e.g., `JvmUnit`, `AndroidInstrumented`) |
+| `target` | — | Series target (e.g., `JVM_UNIT`, `ANDROID_INSTRUMENTED`) |
+| `source` | — | Series source (e.g., `omnivore-agent`, `kover`) |
 | `width` | `400` | Width in pixels |
 | `height` | `120` | Height in pixels |
 | `theme` | `light` | `light` or `dark` |
+
+The chart shows one series. If `target`/`source` match several, it shows the
+one uploaded to most recently; name both to pin it.
 
 **Usage in Markdown** (GitHub README, wiki):
 ```markdown

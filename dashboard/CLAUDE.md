@@ -59,9 +59,16 @@ License: **Apache-2.0**
 | POST | `/api/v1/projects` | Create project (body: `{id, name, description?, github_repo?}`) |
 | PATCH | `/api/v1/projects/{project_id}` | Update project settings (body: `{github_repo?}`) |
 | POST | `/api/v1/ingest/coverage` | Universal ingest — omnivore JSON, lcov, llvm-cov, Go coverprofile, Python coverage.py, or JaCoCo/Kover XML (auto-detects or `?format=`; JaCoCo/Kover accept `?target=` override) |
-| GET | `/api/v1/coverage/{project_id}/latest` | Latest snapshot for project |
-| GET | `/api/v1/coverage/{project_id}/trend?limit=30` | Coverage trend (TrendPoints) |
+| GET | `/api/v1/coverage/{project_id}/latest` | Latest snapshot for one `(target, source)` series (`?target=`, `?source=`) |
+| GET | `/api/v1/coverage/{project_id}/trend?limit=30` | Coverage trend (TrendPoints) for one series (`?target=`, `?source=`) |
+| GET | `/api/v1/coverage/{project_id}/series` | List the project's `(target, source)` series |
 | GET | `/api/v1/coverage/{project_id}/dependencies` | Dependency graph from latest snapshot |
+
+`latest` and `trend` are per series. With one series the selectors are optional;
+when they match several, the endpoint returns **`300 Multiple Choices`** instead
+of picking one (`/series` lists the options). The badge renders "unknown" in
+that case. The trend embed, being an image, charts the series uploaded to most
+recently instead (`resolve_series_or_newest`).
 
 ### PR Comment Integration
 

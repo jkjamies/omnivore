@@ -1249,3 +1249,45 @@ async fn trend_returns_a_single_series() {
         "trend mixed series"
     );
 }
+
+/// The trend embed is an image, so it cannot answer 300. With several series
+/// it charts the one uploaded to most recently, never a mix of them.
+#[tokio::test]
+async fn embed_charts_one_series_when_several_exist() {
+    let db = test_db().await;
+    // Two JVM_UNIT uploads, then one ANDROID_INSTRUMENTED upload (the newest).
+    assert_eq!(ingest(&db, report_with("embed-multi", "E", "a/B.kt")).await, 201);
+    assert_eq!(ingest(&db, report_with("embed-multi", "E", "a/B.kt")).await, 201);
+    let instrumented = serde_json::json!({
+        "version": "0.1.0", "format": "omnivore",
+        "project": {
+            "id": "embed-multi", "name": "E",
+            "commitSha": "abc", "branch": "main", "target": "ANDROID_INSTRUMENTED"
+        },
+        "coverage": {
+            "lineRate": 0.9, "branchRate": 0.9,
+            "linesCovered": 9, "linesTotal": 10,
+            "branchesCovered": 9, "branchesTotal": 10
+        },
+        "files": []
+    })
+    .to_string();
+    assert_eq!(ingest(&db, instrumented).await, 201);
+
+    let points = |svg: &str| -> usize {
+        svg.split("<polyline points=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .map_or(0, |p| p.split_whitespace().count())
+    };
+
+    // No selection: the newest series (instrumented, one upload) — not all three.
+    let (status, svg) = get_text(&db, "/embed/embed-multi/trend").await;
+    assert_eq!(status, 200);
+    assert_eq!(points(&svg), 1, "expected only the newest series: {svg}");
+
+    // An explicit selection is honoured.
+    let (status, svg) = get_text(&db, "/embed/embed-multi/trend?target=JVM_UNIT").await;
+    assert_eq!(status, 200);
+    assert_eq!(points(&svg), 2, "expected the two JVM_UNIT uploads: {svg}");
+}
