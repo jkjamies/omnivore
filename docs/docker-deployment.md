@@ -59,8 +59,9 @@ Note that coverage numbers and file paths stay world-readable even with OAuth
 on — only mutations are gated. Put an authenticating reverse proxy in front if
 that is not acceptable. See `dashboard/README.md#security-model`.
 
-The container runs as an unprivileged user (uid 10001) and writes only to
-`/data`, so bind-mounted host directories must be writable by that uid.
+The server runs as an unprivileged user (uid 10001) and writes only to
+`/data`. See [Data Persistence](#data-persistence) for how ownership of bind
+mounts is handled.
 
 Pass env vars with `-e`:
 
