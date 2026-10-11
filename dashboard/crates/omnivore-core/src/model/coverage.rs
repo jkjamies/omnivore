@@ -193,14 +193,38 @@ impl OmnivoreReport {
     /// upload: a genuinely broken producer should still get the coverage it
     /// measured correctly, and an attacker gets nothing either way.
     pub fn drop_implausible_lines(&mut self) -> usize {
+        let plausible = |n: i32| (1..=MAX_LINE_NUMBER).contains(&n);
         let mut dropped = 0;
         for file in &mut self.files {
             let before = file.lines.len();
-            file.lines
-                .retain(|l| l.line_number >= 1 && l.line_number <= MAX_LINE_NUMBER);
-            dropped += before - file.lines.len();
+            file.lines.retain(|l| plausible(l.line_number));
+            if file.lines.len() != before {
+                dropped += before - file.lines.len();
+                // Keep the file's rate consistent with the lines it still has.
+                let covered = file.lines.iter().filter(|l| l.hit_count > 0).count();
+                file.line_rate = if file.lines.is_empty() {
+                    0.0
+                } else {
+                    covered as f64 / file.lines.len() as f64
+                };
+            }
         }
         if dropped > 0 {
+            // A report carrying impossible line numbers has already shown its
+            // summary can't be trusted, so derive the line totals from the
+            // records that survived — the same lines the file page will show.
+            let c = &mut self.coverage;
+            c.lines_total = self.files.iter().map(|f| f.lines.len() as i64).sum();
+            c.lines_covered = self
+                .files
+                .iter()
+                .map(|f| f.lines.iter().filter(|l| l.hit_count > 0).count() as i64)
+                .sum();
+            c.line_rate = if c.lines_total > 0 {
+                c.lines_covered as f64 / c.lines_total as f64
+            } else {
+                0.0
+            };
             tracing::warn!(
                 dropped,
                 max_line_number = MAX_LINE_NUMBER,

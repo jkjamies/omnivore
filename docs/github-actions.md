@@ -46,8 +46,9 @@ jobs:
       - name: Upload coverage (PR)
         if: github.event_name == 'pull_request'
         run: |
+          # Host hardcoded on purpose: this request carries GITHUB_TOKEN.
           curl -s -X POST \
-            "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}&base_branch=main" \
+            "https://omnivore.example.com/api/v1/ingest/coverage?github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}&base_branch=main" \
             -H "Content-Type: application/json" \
             -H "X-API-Key: ${{ secrets.OMNIVORE_API_KEY }}" \
             -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
@@ -120,8 +121,9 @@ permissions:
 
 - name: Upload coverage
   run: |
+    # Host hardcoded on purpose: this request carries GITHUB_TOKEN.
     curl -s -X POST \
-      "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?format=lcov&project_id=${{ github.event.repository.name }}&project_name=${{ github.event.repository.name }}&commit_sha=${{ github.sha }}&branch=${{ github.ref_name }}&github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}" \
+      "https://omnivore.example.com/api/v1/ingest/coverage?format=lcov&project_id=${{ github.event.repository.name }}&project_name=${{ github.event.repository.name }}&commit_sha=${{ github.sha }}&branch=${{ github.ref_name }}&github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}" \
       -H "X-API-Key: ${{ secrets.OMNIVORE_API_KEY }}" \
       -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \
       -d @coverage.lcov
@@ -138,8 +140,9 @@ permissions:
 
 - name: Upload coverage
   run: |
+    # Host hardcoded on purpose: this request carries GITHUB_TOKEN.
     curl -s -X POST \
-      "${{ vars.OMNIVORE_DASHBOARD_URL }}/api/v1/ingest/coverage?format=llvm-cov&project_id=${{ github.event.repository.name }}&project_name=${{ github.event.repository.name }}&commit_sha=${{ github.sha }}&branch=${{ github.ref_name }}&github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}" \
+      "https://omnivore.example.com/api/v1/ingest/coverage?format=llvm-cov&project_id=${{ github.event.repository.name }}&project_name=${{ github.event.repository.name }}&commit_sha=${{ github.sha }}&branch=${{ github.ref_name }}&github_repo=${{ github.repository }}&pr_number=${{ github.event.pull_request.number }}" \
       -H "Content-Type: application/json" \
       -H "X-API-Key: ${{ secrets.OMNIVORE_API_KEY }}" \
       -H "X-GitHub-Token: ${{ secrets.GITHUB_TOKEN }}" \

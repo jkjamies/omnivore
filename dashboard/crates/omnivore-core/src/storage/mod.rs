@@ -1,3 +1,3 @@
 mod db;
 
-pub use db::{ActivityEntry, Database, HealthStats, RatchetResult};
+pub use db::{ActivityEntry, Database, HealthStats, RatchetPolicy, RatchetResult};

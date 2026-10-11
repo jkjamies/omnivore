@@ -31,10 +31,21 @@ jobs:
         working-directory: test-rigs/kmp-test-rig
         env:
           DASHBOARD_URL: ${{ vars.OMNIVORE_DASHBOARD_URL }}
+          OMNIVORE_API_KEY: ${{ secrets.OMNIVORE_API_KEY }}
         run: |
+          # Once the dashboard has any API key, unauthenticated uploads are
+          # refused. Send one when the secret exists; never send it in clear.
+          AUTH=()
+          if [ -n "$OMNIVORE_API_KEY" ]; then
+            case "$DASHBOARD_URL" in
+              https://*) AUTH=(-H "X-API-Key: $OMNIVORE_API_KEY") ;;
+              *) echo "::error::OMNIVORE_DASHBOARD_URL must be https:// to receive the API key"; exit 1 ;;
+            esac
+          fi
           curl -sS --fail-with-body -X POST \
             "$DASHBOARD_URL/api/v1/ingest/coverage" \
             -H "Content-Type: application/json" \
+            "${AUTH[@]}" \
             -d @build/reports/omnivore/omnivore-report.json
 
       - name: Upload coverage with PR comment
@@ -43,6 +54,10 @@ jobs:
         env:
           DASHBOARD_URL: ${{ vars.OMNIVORE_DASHBOARD_URL }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Empty on fork PRs, which get no secrets; the upload then goes
+          # without it and only succeeds if the dashboard has no keys yet.
+          OMNIVORE_API_KEY: ${{ secrets.OMNIVORE_API_KEY }}
+          EXPECTED_HOST: ${{ vars.OMNIVORE_DASHBOARD_HOST }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
@@ -55,7 +70,6 @@ jobs:
             https://*) ;;
             *) echo "::error::OMNIVORE_DASHBOARD_URL must be https:// to receive the workflow token"; exit 1 ;;
           esac
-          EXPECTED_HOST="${{ vars.OMNIVORE_DASHBOARD_HOST }}"
           if [ -n "$EXPECTED_HOST" ]; then
             ACTUAL_HOST=$(printf '%s' "$DASHBOARD_URL" | sed -E 's#^https://([^/]+).*#\1#')
             if [ "$ACTUAL_HOST" != "$EXPECTED_HOST" ]; then
@@ -64,10 +78,14 @@ jobs:
             fi
           fi
 
+          AUTH=()
+          if [ -n "$OMNIVORE_API_KEY" ]; then AUTH=(-H "X-API-Key: $OMNIVORE_API_KEY"); fi
+
           curl -sS --fail-with-body -X POST \
             "$DASHBOARD_URL/api/v1/ingest/coverage?github_repo=$REPO&pr_number=$PR_NUMBER&base_branch=main" \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Token: $GH_TOKEN" \
+            "${AUTH[@]}" \
             -d @build/reports/omnivore/omnivore-report.json
 
       - name: Upload coverage report artifact

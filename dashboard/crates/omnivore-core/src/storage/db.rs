@@ -35,6 +35,9 @@ pub struct Database {
     /// roughly one run in ten teaches people to press re-run, which is worse
     /// than no suite.
     allow_project_autocreate: bool,
+    /// Which snapshots may raise a ratchet floor. Resolved once, for the same
+    /// reason as `allow_project_autocreate`.
+    ratchet: RatchetPolicy,
 }
 
 impl Database {
@@ -63,6 +66,7 @@ impl Database {
         let db = Self {
             pool,
             allow_project_autocreate: auto_create_projects(),
+            ratchet: RatchetPolicy::from_env(),
         };
         db.run_migrations().await?;
         Ok(db)
@@ -75,6 +79,13 @@ impl Database {
     /// that every other concurrently-running test also reads.
     pub fn with_project_autocreate(mut self, allowed: bool) -> Self {
         self.allow_project_autocreate = allowed;
+        self
+    }
+
+    /// Override which snapshots may raise a ratchet floor; see
+    /// [`with_project_autocreate`](Self::with_project_autocreate) for why.
+    pub fn with_ratchet_policy(mut self, policy: RatchetPolicy) -> Self {
+        self.ratchet = policy;
         self
     }
 
@@ -1219,7 +1230,7 @@ impl Database {
                 // the bar for the whole project — and, because the branch was
                 // never merged, raise it to a number no build on the main line
                 // could reach again.
-                if is_ratchet_branch(snapshot.branch.as_deref()) {
+                if self.ratchet.allows(snapshot.branch.as_deref()) {
                     self.advance_ratchet_floor(
                         &snapshot.project_id,
                         snapshot.line_rate,
@@ -1505,24 +1516,49 @@ fn auto_create_projects() -> bool {
     }
 }
 
-/// Branches whose snapshots are allowed to raise a project's ratchet floor.
+/// Which snapshots are allowed to raise a project's ratchet floor.
 ///
-/// Defaults to the usual release lines; override with a comma-separated
-/// `OMNIVORE_RATCHET_BRANCHES`. A snapshot with no branch recorded still
-/// counts, since single-branch setups often omit it — unless
-/// `OMNIVORE_RATCHET_REQUIRE_BRANCH=true`, for deployments where an upload
-/// that leaves the branch off could come from a feature branch.
-fn is_ratchet_branch(branch: Option<&str>) -> bool {
-    let Some(branch) = branch.map(str::trim).filter(|b| !b.is_empty()) else {
-        return !std::env::var("OMNIVORE_RATCHET_REQUIRE_BRANCH")
+/// Branches default to the usual release lines; override with a
+/// comma-separated `OMNIVORE_RATCHET_BRANCHES`. A snapshot with no branch
+/// recorded still counts, since single-branch setups often omit it — unless
+/// `OMNIVORE_RATCHET_REQUIRE_BRANCH=true`, for deployments where an upload that
+/// leaves the branch off could come from a feature branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RatchetPolicy {
+    pub branches: Vec<String>,
+    pub require_branch: bool,
+}
+
+impl Default for RatchetPolicy {
+    fn default() -> Self {
+        Self { branches: vec!["main".into(), "master".into()], require_branch: false }
+    }
+}
+
+impl RatchetPolicy {
+    pub fn from_env() -> Self {
+        let mut policy = Self::default();
+        if let Ok(list) = std::env::var("OMNIVORE_RATCHET_BRANCHES") {
+            let branches: Vec<String> = list
+                .split(',')
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(String::from)
+                .collect();
+            if !branches.is_empty() {
+                policy.branches = branches;
+            }
+        }
+        policy.require_branch = std::env::var("OMNIVORE_RATCHET_REQUIRE_BRANCH")
             .is_ok_and(|v| v.trim().eq_ignore_ascii_case("true"));
-    };
-    match std::env::var("OMNIVORE_RATCHET_BRANCHES") {
-        Ok(list) if !list.trim().is_empty() => list
-            .split(',')
-            .map(str::trim)
-            .any(|allowed| !allowed.is_empty() && allowed.eq_ignore_ascii_case(branch)),
-        _ => branch.eq_ignore_ascii_case("main") || branch.eq_ignore_ascii_case("master"),
+        policy
+    }
+
+    pub fn allows(&self, branch: Option<&str>) -> bool {
+        match branch.map(str::trim).filter(|b| !b.is_empty()) {
+            None => !self.require_branch,
+            Some(branch) => self.branches.iter().any(|b| b.eq_ignore_ascii_case(branch)),
+        }
     }
 }
 
@@ -1547,7 +1583,25 @@ pub struct HealthStats {
 
 #[cfg(test)]
 mod tests {
-    use super::Database;
+    use super::{Database, RatchetPolicy};
+
+    #[test]
+    fn ratchet_policy_defaults_to_release_branches_and_counts_missing_branch() {
+        let policy = RatchetPolicy::default();
+        assert!(policy.allows(Some("main")));
+        assert!(policy.allows(Some("Master")));
+        assert!(!policy.allows(Some("feature/x")));
+        assert!(policy.allows(None));
+        assert!(policy.allows(Some("  ")));
+    }
+
+    #[test]
+    fn ratchet_policy_can_require_a_branch_and_name_its_own() {
+        let policy = RatchetPolicy { branches: vec!["release".into()], require_branch: true };
+        assert!(policy.allows(Some("release")));
+        assert!(!policy.allows(Some("main")));
+        assert!(!policy.allows(None));
+    }
 
     #[test]
     fn index_detection_covers_every_create_index_form() {
