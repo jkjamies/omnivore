@@ -3,7 +3,7 @@ pub mod routes;
 pub use routes::auth::OAuthConfig;
 pub use routes::health::init_uptime;
 
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::{routing, Router};
 use omnivore_core::storage::Database;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -63,7 +63,14 @@ fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods([Method::GET, Method::POST, Method::PATCH])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        // The write API authenticates with X-API-Key and may forward a caller's
+        // X-GitHub-Token; without them a cross-origin preflight is refused.
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("x-github-token"),
+        ])
 }
 
 /// Build the application router. Extracted so integration tests can reuse it.
