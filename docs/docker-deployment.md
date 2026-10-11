@@ -40,6 +40,7 @@ All configuration is via environment variables:
 | `OMNIVORE_CORS_ORIGINS` | *(same-origin)* | Comma-separated allowed origins, or `*` |
 | `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum ingest body size (32 MiB) |
 | `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a ratchet floor |
+| `OMNIVORE_RATCHET_REQUIRE_BRANCH` | `false` | When `true`, uploads with no branch never raise a ratchet floor |
 
 ### Before exposing this beyond localhost
 
