@@ -73,17 +73,9 @@ The SQLite database lives at `/data/omnivore.db` inside the container. **Always 
 -v /path/on/host:/data
 ```
 
-The container runs as a non-root user, **UID 10001**. A new named volume gets the right ownership automatically, but a bind-mounted host directory keeps its host ownership, so make it writable by that UID before starting the container:
+The server runs as a non-root user, **UID 10001**. On startup the container re-owns anything in `/data` that UID 10001 doesn't own, then drops root before the server starts, so bind mounts and volumes created by older root-run images work without a manual `chown`.
 
-```sh
-sudo chown -R 10001:10001 /path/on/host
-```
-
-Do the same when upgrading from an image that ran as root: the existing `omnivore.db` (in a bind mount *or* a named volume) is owned by root, and the server cannot open it until it is re-owned. For a named volume:
-
-```sh
-docker run --rm -v omnivore-data:/data alpine chown -R 10001:10001 /data
-```
+If you start the container with `--user`, that step is skipped and the mounted directory must already be writable by the user you chose.
 
 ## Docker Compose
 
@@ -113,7 +105,6 @@ The dashboard runs comfortably on QNAP NAS devices via Container Station. The Ru
 2. Open **Container Station** > **Create** > **Docker Compose**
 3. Point to the `docker-compose.yml` or paste the compose config above
 4. Set a shared folder as the data volume (e.g., `/share/Container/omnivore:/data`)
-   — over SSH, `chown -R 10001:10001` that folder first (see [Data Persistence](#data-persistence))
 5. Click **Create**
 
 ### Option 2: SSH + Docker CLI
@@ -125,9 +116,7 @@ ssh admin@<qnap-ip>
 cd /share/repos/omnivore/dashboard
 docker build -t omnivore-dashboard .
 
-# Run with a bind mount to a shared folder (owned by the container's UID)
-mkdir -p /share/Container/omnivore-data
-chown -R 10001:10001 /share/Container/omnivore-data
+# Run with a bind mount to a shared folder
 docker run -d \
   --name omnivore \
   -p 3000:3000 \
