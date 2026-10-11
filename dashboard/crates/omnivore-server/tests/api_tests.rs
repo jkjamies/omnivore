@@ -1266,7 +1266,7 @@ async fn project_autocreate_can_be_disabled() {
     let db = test_db().await.with_project_autocreate(false);
 
     let status = ingest(&db, report_with("unknown-project", "X", "a/B.kt")).await;
-    assert_eq!(status, 500, "ingest to an unknown project should be refused");
+    assert_eq!(status, 404, "an unknown project is a client error, not a server fault");
 
     let req = Request::get("/api/v1/projects").body(Body::empty()).unwrap();
     let (_, body) = send(db, req).await;

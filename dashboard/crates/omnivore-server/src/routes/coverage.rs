@@ -127,6 +127,26 @@ pub async fn ingest_coverage(
         &snapshot.project_id,
     )?;
 
+    // Closed mode: say plainly that the project is unknown, rather than let
+    // ingest_snapshot refuse it and surface as a 500. A mistyped project_id in
+    // CI is exactly what this setting exists to catch.
+    if !db.allows_project_autocreate() {
+        let exists = db.get_project(&snapshot.project_id).await.map_err(|e| {
+            tracing::error!(error = %e, "Project lookup failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to look up project".to_string())
+        })?;
+        if exists.is_none() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!(
+                    "Project '{}' does not exist. Create it first, or set \
+                     OMNIVORE_ALLOW_PROJECT_AUTOCREATE=true on the dashboard.",
+                    snapshot.project_id
+                ),
+            ));
+        }
+    }
+
     let project_name = report.project.name.clone();
     let ratchet = db.ingest_snapshot(&snapshot, Some(&project_name))
         .await
