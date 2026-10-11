@@ -1375,10 +1375,13 @@ impl Database {
 ///
 /// Defaults to the usual release lines; override with a comma-separated
 /// `OMNIVORE_RATCHET_BRANCHES`. A snapshot with no branch recorded still
-/// counts, since single-branch setups often omit it.
+/// counts, since single-branch setups often omit it — unless
+/// `OMNIVORE_RATCHET_REQUIRE_BRANCH=true`, for deployments where an upload
+/// that leaves the branch off could come from a feature branch.
 fn is_ratchet_branch(branch: Option<&str>) -> bool {
     let Some(branch) = branch.map(str::trim).filter(|b| !b.is_empty()) else {
-        return true;
+        return !std::env::var("OMNIVORE_RATCHET_REQUIRE_BRANCH")
+            .is_ok_and(|v| v.trim().eq_ignore_ascii_case("true"));
     };
     match std::env::var("OMNIVORE_RATCHET_BRANCHES") {
         Ok(list) if !list.trim().is_empty() => list

@@ -99,6 +99,7 @@ Connection pool: max 5, opened with `SqliteConnectOptions` setting `foreign_keys
 - `OMNIVORE_CORS_ORIGINS` — (optional, default same-origin) comma-separated allowed origins, or `*`
 - `OMNIVORE_MAX_UPLOAD_BYTES` — (optional, default 32 MiB) ingest body ceiling
 - `OMNIVORE_RATCHET_BRANCHES` — (optional, default `main,master`) branches whose snapshots may raise a ratchet floor
+- `OMNIVORE_RATCHET_REQUIRE_BRANCH` — (optional, default `false`) when `true`, a snapshot with no branch never raises a ratchet floor
 
 ## Authorization
 
