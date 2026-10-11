@@ -19,6 +19,22 @@ pub mod source {
     pub const PYTHON_COVERAGE: &str = "python-coverage";
 }
 
+/// The largest line number any real source file can plausibly have.
+///
+/// Coverage line numbers are `i32` and, until this bound existed, were taken
+/// entirely on trust from the uploaded report. Nothing rejected
+/// `{"lineNumber": 2000000000}`, and nothing downstream expected it — the file
+/// coverage page renders a row per line from 1 to the highest line it sees, so
+/// a single such record turned every later *read* of that page into an attempt
+/// to allocate two billion rows. Ingest is unauthenticated on a default
+/// install, the record is persisted, and the victim is whoever opens the page
+/// next. That made a one-line upload a durable denial of service.
+///
+/// Two million is far above any real file (the largest generated sources in the
+/// wild are low hundreds of thousands of lines) and far below the point where
+/// anything downstream struggles.
+pub const MAX_LINE_NUMBER: i32 = 2_000_000;
+
 /// Omnivore report format — matches the JSON schema from the Kotlin plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OmnivoreReport {
@@ -165,6 +181,60 @@ pub struct LineCoverage {
     pub hit_count: i64,
 }
 
+impl OmnivoreReport {
+    /// Discard line records that cannot describe a real source line.
+    ///
+    /// Returns how many were dropped, so the caller can say so rather than
+    /// silently changing the numbers.
+    ///
+    /// A line number outside `1..=MAX_LINE_NUMBER` is not "unusual coverage" —
+    /// it is malformed or hostile input, and there is no reading of it that
+    /// produces a useful report. Dropping is preferable to rejecting the whole
+    /// upload: a genuinely broken producer should still get the coverage it
+    /// measured correctly, and an attacker gets nothing either way.
+    pub fn drop_implausible_lines(&mut self) -> usize {
+        let plausible = |n: i32| (1..=MAX_LINE_NUMBER).contains(&n);
+        let mut dropped = 0;
+        for file in &mut self.files {
+            let before = file.lines.len();
+            file.lines.retain(|l| plausible(l.line_number));
+            if file.lines.len() != before {
+                dropped += before - file.lines.len();
+                // Keep the file's rate consistent with the lines it still has.
+                let covered = file.lines.iter().filter(|l| l.hit_count > 0).count();
+                file.line_rate = if file.lines.is_empty() {
+                    0.0
+                } else {
+                    covered as f64 / file.lines.len() as f64
+                };
+            }
+        }
+        if dropped > 0 {
+            // A report carrying impossible line numbers has already shown its
+            // summary can't be trusted, so derive the line totals from the
+            // records that survived — the same lines the file page will show.
+            let c = &mut self.coverage;
+            c.lines_total = self.files.iter().map(|f| f.lines.len() as i64).sum();
+            c.lines_covered = self
+                .files
+                .iter()
+                .map(|f| f.lines.iter().filter(|l| l.hit_count > 0).count() as i64)
+                .sum();
+            c.line_rate = if c.lines_total > 0 {
+                c.lines_covered as f64 / c.lines_total as f64
+            } else {
+                0.0
+            };
+            tracing::warn!(
+                dropped,
+                max_line_number = MAX_LINE_NUMBER,
+                "Ignored coverage records with implausible line numbers"
+            );
+        }
+        dropped
+    }
+}
+
 // -- Dependency Graph --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,7 +304,16 @@ impl CoverageSnapshot {
     /// form (via [`CoverageTarget::as_str`]) and `source` records provenance.
     /// A `None`/empty `source` argument falls back to the report's own
     /// `project.source`, then to the Omnivore agent.
-    pub fn from_report(report: &OmnivoreReport, source: Option<&str>) -> Self {
+    /// Build a snapshot from a parsed report.
+    ///
+    /// Takes `&mut` so it can sanitize first. Every parser funnels through here
+    /// on its way to storage, which makes this the one place a bound on line
+    /// numbers cannot be forgotten when a seventh format is added — and the
+    /// place it has to be, since `files_json` is serialized here and is what the
+    /// file coverage page later reads back.
+    pub fn from_report(report: &mut OmnivoreReport, source: Option<&str>) -> Self {
+        report.drop_implausible_lines();
+
         let files_json = serde_json::to_string(&report.files).ok();
         let dependencies_json = report
             .dependencies

@@ -92,9 +92,17 @@ impl CoverageFormat {
                 Some(Self::LlvmCov)
             } else if trimmed.contains("\"executed_lines\"") && trimmed.contains("\"num_statements\"") {
                 Some(Self::PythonCoverage)
-            } else {
-                // Default JSON to omnivore
+            } else if trimmed.contains("\"coverage\"") && trimmed.contains("\"files\"") {
+                // Shaped like an omnivore report even without the format marker
+                // (older plugin output).
                 Some(Self::Omnivore)
+            } else {
+                // Previously *any* unrecognised JSON was assumed to be an
+                // omnivore report, so a wrong-format upload surfaced as an
+                // obscure serde error about a missing field rather than
+                // "unknown format". Returning None lets the caller say what is
+                // actually wrong and list the supported formats.
+                None
             }
         } else if trimmed.starts_with("TN:") || trimmed.starts_with("SF:") {
             Some(Self::Lcov)
