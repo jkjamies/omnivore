@@ -21,12 +21,12 @@ updates:
 
   # KMP Test Rig (Gradle)
   - package-ecosystem: "gradle"
-    directory: "/kmp-test-rig"
+    directory: "/test-rigs/kmp-test-rig"
     schedule:
       interval: "weekly"
 
   # Android Test Rig (Gradle)
   - package-ecosystem: "gradle"
-    directory: "/android-test-rig"
+    directory: "/test-rigs/android-test-rig"
     schedule:
       interval: "weekly"
