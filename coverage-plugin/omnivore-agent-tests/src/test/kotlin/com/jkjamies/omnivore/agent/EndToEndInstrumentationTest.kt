@@ -60,7 +60,7 @@ class EndToEndInstrumentationTest {
 
     /** Instrument bytecode and load the resulting class. */
     private fun instrumentAndLoad(internalName: String, bytecode: ByteArray): Class<*> {
-        val instrumented = transformer.transform(null, internalName, null, null, bytecode)
+        val instrumented = transformer.transform(javaClass.classLoader, internalName, null, null, bytecode)
         assertNotNull(instrumented, "$internalName should be instrumented")
 
         val dotName = internalName.replace('/', '.')
@@ -337,13 +337,13 @@ class EndToEndInstrumentationTest {
 
         val bytecode = generateSimpleCalc()
         val result = composeTransformer.transform(
-            null, "com/example/ComposableSingletons\$MainKt", null, null, bytecode
+            javaClass.classLoader, "com/example/ComposableSingletons\$MainKt", null, null, bytecode
         )
         assertTrue(result == null, "ComposableSingletons should not be instrumented")
 
         // Regular class should still be instrumented
         val result2 = composeTransformer.transform(
-            null, "com/example/MyViewModel", null, null, bytecode
+            javaClass.classLoader, "com/example/MyViewModel", null, null, bytecode
         )
         assertNotNull(result2, "Regular class should be instrumented")
     }

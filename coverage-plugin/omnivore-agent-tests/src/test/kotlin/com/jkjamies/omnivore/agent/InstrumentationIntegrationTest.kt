@@ -144,7 +144,7 @@ class InstrumentationIntegrationTest {
 
         // Instrument
         val instrumented = transformer.transform(
-            null, "test/SimpleClass", null, null, original
+            javaClass.classLoader, "test/SimpleClass", null, null, original
         )
 
         // Should have been instrumented (not null)
@@ -164,7 +164,7 @@ class InstrumentationIntegrationTest {
         val original = generateBranchClass()
 
         val instrumented = transformer.transform(
-            null, "test/BranchClass", null, null, original
+            javaClass.classLoader, "test/BranchClass", null, null, original
         )
 
         assertNotNull(instrumented, "BranchClass should be instrumented")
@@ -176,16 +176,34 @@ class InstrumentationIntegrationTest {
         val bytecode = generateSimpleClass()
 
         // Kotlin stdlib should be skipped
-        val result1 = transformer.transform(null, "kotlin/collections/List", null, null, bytecode)
+        val result1 = transformer.transform(javaClass.classLoader, "kotlin/collections/List", null, null, bytecode)
         assertTrue(result1 == null, "Kotlin stdlib should not be instrumented")
 
         // JDK classes should be skipped
-        val result2 = transformer.transform(null, "java/util/HashMap", null, null, bytecode)
+        val result2 = transformer.transform(javaClass.classLoader, "java/util/HashMap", null, null, bytecode)
         assertTrue(result2 == null, "JDK classes should not be instrumented")
 
         // ASM classes should be skipped
-        val result3 = transformer.transform(null, "org/objectweb/asm/ClassReader", null, null, bytecode)
+        val result3 = transformer.transform(javaClass.classLoader, "org/objectweb/asm/ClassReader", null, null, bytecode)
         assertTrue(result3 == null, "ASM classes should not be instrumented")
+    }
+
+    @Test
+    fun `skips bootstrap classes when the runtime is not on the boot class path`() {
+        // Kover's IntelliJ agent appends itself to the boot class path. Its
+        // premain classes reach us with a null loader; instrumenting them made
+        // their <clinit> fail to resolve OmnivoreRuntime and abort the JVM.
+        val bytecode = generateSimpleClass()
+        val result = transformer.transform(null, "test/SimpleClass", null, null, bytecode)
+        assertTrue(result == null, "bootstrap-loaded classes cannot see OmnivoreRuntime")
+    }
+
+    @Test
+    fun `skips other coverage agents`() {
+        val bytecode = generateSimpleClass()
+        val loader = javaClass.classLoader
+        assertTrue(transformer.transform(loader, "com/intellij/rt/coverage/main/CoveragePremain", null, null, bytecode) == null)
+        assertTrue(transformer.transform(loader, "org/jacoco/agent/rt/RT", null, null, bytecode) == null)
     }
 
     @Test
@@ -198,7 +216,7 @@ class InstrumentationIntegrationTest {
         val bytecode = generateSimpleClass()
 
         // Should NOT instrument — doesn't match include pattern
-        val result1 = includeTransformer.transform(null, "test/SimpleClass", null, null, bytecode)
+        val result1 = includeTransformer.transform(javaClass.classLoader, "test/SimpleClass", null, null, bytecode)
         assertTrue(result1 == null, "test/SimpleClass should not match com.example.* include")
 
         // Would match if it were in the right package
@@ -214,7 +232,7 @@ class InstrumentationIntegrationTest {
         val excludeTransformer = OmnivoreClassTransformer(dataStore, config = config)
         val bytecode = generateSimpleClass()
 
-        val result = excludeTransformer.transform(null, "test/SimpleClass", null, null, bytecode)
+        val result = excludeTransformer.transform(javaClass.classLoader, "test/SimpleClass", null, null, bytecode)
         assertTrue(result == null, "test/SimpleClass should be excluded by test.* pattern")
     }
 
@@ -226,13 +244,13 @@ class InstrumentationIntegrationTest {
 
         // ComposableSingletons should be skipped
         val result = composeTransformer.transform(
-            null, "com/example/ComposableSingletons\$MainKt", null, null, bytecode
+            javaClass.classLoader, "com/example/ComposableSingletons\$MainKt", null, null, bytecode
         )
         assertTrue(result == null, "ComposableSingletons should be skipped")
 
         // LiveLiterals should be skipped
         val result2 = composeTransformer.transform(
-            null, "com/example/LiveLiterals\$MainKt", null, null, bytecode
+            javaClass.classLoader, "com/example/LiveLiterals\$MainKt", null, null, bytecode
         )
         assertTrue(result2 == null, "LiveLiterals should be skipped")
     }
@@ -244,7 +262,7 @@ class InstrumentationIntegrationTest {
         val bytecode = generateSimpleClass()
 
         val result = composeTransformer.transform(
-            null, "com/example/MyViewModel", null, null, bytecode
+            javaClass.classLoader, "com/example/MyViewModel", null, null, bytecode
         )
         assertNotNull(result, "Regular classes should still be instrumented with Compose filter on")
     }
