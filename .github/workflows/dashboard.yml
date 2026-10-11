@@ -14,6 +14,9 @@ on:
       - 'dashboard/**'
       - '.github/workflows/dashboard.yml'
 
+permissions:
+  contents: read
+
 defaults:
   run:
     working-directory: dashboard
@@ -78,4 +81,29 @@ jobs:
           done
           echo "dashboard did not become healthy"
           docker logs omnivore-ci
+          exit 1
+
+      # Upgrade path: the old image ran as root, so an existing bind mount
+      # holds a root-owned database. The entrypoint must re-own it and the
+      # server (running as UID 10001) must then be able to write to it.
+      - name: Smoke test with a root-owned bind mount
+        run: |
+          mkdir -p "$RUNNER_TEMP/omnivore-data"
+          touch "$RUNNER_TEMP/omnivore-data/omnivore.db"
+          sudo chown -R 0:0 "$RUNNER_TEMP/omnivore-data"
+          docker run -d --name omnivore-bind -p 3001:3000 \
+            -v "$RUNNER_TEMP/omnivore-data:/data" omnivore-dashboard:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3001/api/v1/health; then
+              owner=$(stat -c %u "$RUNNER_TEMP/omnivore-data/omnivore.db")
+              server_uid=$(docker exec omnivore-bind sh -c 'stat -c %u /proc/1')
+              echo "db owner=$owner server uid=$server_uid"
+              test "$owner" = 10001 && test "$server_uid" = 10001 && exit 0
+              echo "expected the database and server process to be UID 10001"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "dashboard did not become healthy with a root-owned bind mount"
+          docker logs omnivore-bind
           exit 1

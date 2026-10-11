@@ -16,6 +16,7 @@ import com.jkjamies.omnivore.agent.runtime.ProbeMapReader
 import com.jkjamies.omnivore.gradle.GraphFormat
 import com.jkjamies.omnivore.gradle.configuration.DependencyGraphWriter
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
@@ -274,6 +275,10 @@ abstract class OmnivoreReportTask : DefaultTask() {
         for (execFile in execFiles) {
             val fileStore = ExecutionDataReader.read(execFile)
             for (data in fileStore.getAllData()) {
+                // Taken before getOrCreateProbes, which grows the stored array
+                // to the larger size: comparing afterwards misses the case
+                // where the later file has more probes.
+                val previousSize = store.getData(data.classId)?.probes?.size
                 val probes = store.getOrCreateProbes(data.classId, data.className, data.probes.size)
                 // Probe arrays for the same class can differ in length across
                 // files: a class ID is a hash of the class *name*, so a stale
@@ -282,11 +287,11 @@ abstract class OmnivoreReportTask : DefaultTask() {
                 // blind used to throw ArrayIndexOutOfBoundsException and fail
                 // the whole report; clamp to the shorter array instead and
                 // report how much was skipped.
-                if (data.probes.size != probes.size) {
+                if (previousSize != null && previousSize != data.probes.size) {
                     mismatchedClasses++
                     logger.debug(
                         "Omnivore: probe count mismatch for {} ({} vs {}) — merging the common prefix",
-                        data.className, data.probes.size, probes.size,
+                        data.className, data.probes.size, previousSize,
                     )
                 }
                 val shared = minOf(data.probes.size, probes.size)
@@ -303,7 +308,11 @@ abstract class OmnivoreReportTask : DefaultTask() {
             )
         }
         val probeMap = ProbeMap()
-        val seenProbes = mutableMapOf<Long, MutableSet<Int>>()
+        // What each (class, probe index) was first seen to mean, so a second
+        // probe file that disagrees is caught rather than silently losing to
+        // whichever file the directory walk happened to visit first.
+        val seenProbes = mutableMapOf<Long, MutableMap<Int, String>>()
+        val conflicting = mutableMapOf<Long, String>()
         val unreadableProbeFiles = mutableListOf<String>()
         for (probeFile in probeFiles) {
             // A probe map written by an older Omnivore is rejected by the
@@ -322,13 +331,18 @@ abstract class OmnivoreReportTask : DefaultTask() {
                 val target = probeMap.getOrCreateClassMap(
                     classMap.classId, classMap.className, classMap.sourceFile
                 )
-                val seen = seenProbes.getOrPut(classMap.classId) { mutableSetOf() }
+                val seen = seenProbes.getOrPut(classMap.classId) { mutableMapOf() }
                 for (probe in classMap.getProbes()) {
                     // Two probe files can describe the same class (multiple test
                     // tasks writing into the same directory). Adding an entry
                     // per occurrence double-counted every branch, since the
                     // analyzer counts one branch per BRANCH entry.
-                    if (!seen.add(probe.probeIndex)) continue
+                    val meaning = "${probe.lineNumber}|${probe.methodName}|${probe.methodDesc}|${probe.type}"
+                    val previous = seen.putIfAbsent(probe.probeIndex, meaning)
+                    if (previous != null) {
+                        if (previous != meaning) conflicting[classMap.classId] = classMap.className
+                        continue
+                    }
                     target.addProbe(
                         probe.probeIndex,
                         probe.lineNumber,
@@ -353,13 +367,22 @@ abstract class OmnivoreReportTask : DefaultTask() {
                     unreadableProbeFiles.joinToString("\n  ")
             )
         }
-        if (probeMap.isEmpty()) {
-            throw TaskExecutionException(
-                this,
-                RuntimeException(
-                    "No usable probe maps: all ${probeFiles.size} .probes file(s) were written by a " +
-                        "different version of Omnivore. Run a clean build to regenerate coverage data."
-                )
+        if (probeFiles.isNotEmpty() && unreadableProbeFiles.size == probeFiles.size) {
+            throw GradleException(
+                "No usable probe maps: all ${probeFiles.size} .probes file(s) were written by a " +
+                    "different version of Omnivore. Run a clean build to regenerate coverage data."
+            )
+        }
+
+        // Same class, same probe index, different source location: the probe
+        // maps come from different builds of that class, and there is no way
+        // to tell which one the execution data was recorded against.
+        for (classId in conflicting.keys) probeMap.removeClassMap(classId)
+        if (conflicting.isNotEmpty()) {
+            logger.warn(
+                "Omnivore: dropped ${conflicting.size} class(es) whose probe maps disagree across " +
+                    "files (e.g. ${conflicting.values.take(3).joinToString()}), which means they came " +
+                    "from different builds. Run a clean build to include them."
             )
         }
 

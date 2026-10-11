@@ -30,6 +30,9 @@ on:
       - 'test-rigs/android-test-rig/**'
       - '.github/workflows/android.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build-time-transform:
     runs-on: ubuntu-latest
@@ -45,7 +48,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
 
       - uses: gradle/actions/setup-gradle@v6
 
@@ -62,9 +65,10 @@ jobs:
             echo "Either OmnivoreClassVisitorFactory never ran, or it instrumented no classes."
             exit 1
           fi
-          # Magic (8) + version (2) + at least one class entry.
+          # Magic (8) + version (2) + classCount (4) is 14 bytes; anything
+          # beyond that means at least one class entry was written.
           SIZE=$(wc -c < "$PROBES")
-          if [ "$SIZE" -le 10 ]; then
+          if [ "$SIZE" -le 14 ]; then
             echo "::error::Probe map is header-only ($SIZE bytes) — no classes were instrumented."
             exit 1
           fi

@@ -4,7 +4,7 @@ pub mod routes;
 pub use routes::auth::OAuthConfig;
 pub use routes::health::init_uptime;
 
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::{routing, Router};
 use omnivore_core::storage::Database;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -64,7 +64,14 @@ fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods([Method::GET, Method::POST, Method::PATCH])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        // The write API authenticates with X-API-Key and may forward a caller's
+        // X-GitHub-Token; without them a cross-origin preflight is refused.
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("x-github-token"),
+        ])
 }
 
 /// Build the application router. Extracted so integration tests can reuse it.
@@ -311,6 +318,18 @@ pub async fn log_security_posture(db: &Database) {
             "Write access: OPEN — no API keys exist, so anyone can upload coverage and create \
              projects. Create a key under /settings, or set OMNIVORE_REQUIRE_API_KEY=true."
         ),
+    }
+
+    // With OAuth on, admin access must be granted explicitly. Without either
+    // setting nobody can reach global settings or API keys, which otherwise
+    // only shows up as a 403 the first time someone tries.
+    let configured = |name: &str| std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
+    if oauth && !configured("OMNIVORE_ADMIN_USERS") && !configured("OMNIVORE_GITHUB_ORG") {
+        tracing::warn!(
+            "GitHub OAuth is enabled but no dashboard admin is configured: set \
+             OMNIVORE_ADMIN_USERS (comma-separated GitHub usernames) or \
+             OMNIVORE_GITHUB_ORG, or nobody can manage global settings or API keys"
+        );
     }
 
     if oauth && !omnivore_core::crypto::is_enabled() {

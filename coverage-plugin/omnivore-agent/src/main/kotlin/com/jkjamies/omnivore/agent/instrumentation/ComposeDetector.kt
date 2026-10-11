@@ -1,5 +1,6 @@
 package com.jkjamies.omnivore.agent.instrumentation
 
+import com.jkjamies.omnivore.agent.AgentConfig
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.tree.AnnotationNode
 import org.objectweb.asm.tree.ClassNode
@@ -33,6 +34,16 @@ object ComposeDetector {
             className.contains(pattern)
         }
     }
+
+    /**
+     * Whether the Compose filter excludes [internalName] (slash-separated) as a
+     * whole. The load-time agent and the AGP build-time transform both decide
+     * through this, so Android and JVM coverage skip the same classes.
+     */
+    fun isExcludedClass(internalName: String, config: AgentConfig): Boolean =
+        config.composeFilterEnabled &&
+            (isGeneratedClass(internalName) ||
+                matchesExcludePattern(internalName, config.composeExcludePatterns))
 
     /**
      * Check if an entire class should be excluded based on custom patterns.

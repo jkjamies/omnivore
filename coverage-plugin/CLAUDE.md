@@ -158,6 +158,12 @@ old `.probes` with new execution data would silently attribute coverage to the
 wrong lines. `branchGroup` identifies which decision point an edge belongs to, so
 two edges of one `if` are distinguishable from two unrelated branches.
 
+`.omnivore` execution data stays at **v1**: its layout (one hit flag per probe
+index) did not change. What changed is what an index *means*, which the probe
+map's version records — so the v3 check on `.probes` is what keeps old and new
+data from being paired, and `dropStaleClasses` drops a class whose execution
+data and probe map disagree.
+
 **`.stats` (instrumentation summary):** Java `Properties` — instrumented count,
 per-reason skip counts, and up to 20 failure messages.
 
