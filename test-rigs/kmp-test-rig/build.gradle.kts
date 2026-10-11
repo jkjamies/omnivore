@@ -7,7 +7,7 @@ plugins {
     // off by default: applying Kover instruments the `test` task, and the default
     // `omnivoreReport` flow (and CI) already instruments those same tests with the
     // Omnivore agent. Enabling it only on request keeps the two off each other.
-    id("org.jetbrains.kotlinx.kover") version "0.9.8" apply false
+    id("org.jetbrains.kotlinx.kover") version "0.9.11" apply false
 }
 
 // Enable with `-Pomnivore.kover` (presence, any/no value):
