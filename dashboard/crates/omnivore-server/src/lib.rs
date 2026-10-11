@@ -160,7 +160,6 @@ pub fn build_router(db: Database) -> Router {
             "/projects/{project_id}/files/{*file_path}",
             routing::get(routes::pages::file_coverage_page),
         )
-        .route("/health", routing::get(routes::pages::health_page))
         // Source fragment (HTMX, uses user token if logged in)
         .route(
             "/api/v1/source/{project_id}/files/{*file_path}",
@@ -215,6 +214,10 @@ pub fn build_router(db: Database) -> Router {
         .route("/auth/logout", routing::post(routes::auth::logout))
         .route("/auth/me", routing::get(routes::auth::me))
         .route("/api/v1/health", routing::get(routes::health::health))
+        // The HTML health page shows the same counts /api/v1/health already
+        // returns openly, so gating it would protect nothing and could break a
+        // health check pointed at it.
+        .route("/health", routing::get(routes::pages::health_page))
         .route(
             "/api/v1/projects",
             routing::post(routes::projects::create_project),
