@@ -341,6 +341,8 @@ Keys can be **global** (upload to any project) or **project-scoped** (restricted
 
 For CI, store the key as a secret (e.g., `OMNIVORE_API_KEY` in GitHub Actions). See [GitHub Actions Integration](docs/github-actions.md) for examples.
 
+Locally, the Gradle plugin reads `OMNIVORE_API_KEY` or the `omnivore.apiKey` property. Put the property in `~/.gradle/gradle.properties`, not a project's `gradle.properties` — project files are committed, and CI fails if one contains a key.
+
 ### GitHub OAuth (Optional)
 
 Enable GitHub login by creating a [GitHub OAuth App](https://github.com/settings/developers) and setting `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. When configured:
