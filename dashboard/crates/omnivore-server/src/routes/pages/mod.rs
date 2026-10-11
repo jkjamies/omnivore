@@ -275,10 +275,15 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
         return None;
     }
 
+    // A target contributes to the union only if it carries per-line data. One
+    // pruned by retention, or from a format that reports per-file rates only,
+    // has file entries with no lines and is counted from its summary instead.
+    let has_lines = |t: &TargetSnapshot| t.files.iter().any(|f| !f.lines.is_empty());
+
     // path -> line number -> covered by any target
     let mut union: std::collections::HashMap<&str, std::collections::HashMap<i32, bool>> =
         std::collections::HashMap::new();
-    for target in targets {
+    for target in targets.iter().filter(|t| has_lines(t)) {
         for file in &target.files {
             let lines = union.entry(file.path.as_str()).or_default();
             for line in &file.lines {
@@ -297,7 +302,7 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
             .sum();
         // A target whose file data was pruned by retention has nothing to
         // union; add its summary totals rather than dropping it entirely.
-        let pruned = targets.iter().filter(|t| t.files.is_empty());
+        let pruned = targets.iter().filter(|t| !has_lines(t));
         let (p_covered, p_total, p_files) = pruned.fold((0, 0, 0), |acc, t| {
             (acc.0 + t.lines_covered, acc.1 + t.lines_total, acc.2 + t.file_count)
         });
@@ -318,7 +323,7 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
     let line_rate = if lines_total > 0 { lines_covered as f64 / lines_total as f64 } else { 0.0 };
     let branch_rate = if branches_total > 0 { branches_covered as f64 / branches_total as f64 } else { 0.0 };
 
-    let lines_are_union = have_file_data && targets.iter().all(|t| !t.files.is_empty());
+    let lines_are_union = have_file_data && targets.iter().all(has_lines);
 
     // The previous composite can only be reconstructed by summing per-target
     // totals; the previous run's per-line data isn't available to union. So
@@ -605,6 +610,23 @@ mod tests {
         assert_eq!(composite.lines_covered, 2, "lines 1 and 2 were covered between them");
         assert_eq!(composite.file_count, 1, "one distinct file");
         assert!(composite.lines_are_union);
+    }
+
+    /// File entries without per-line data (per-file rates only) count as a
+    /// summary, not as an empty contribution to the union.
+    #[test]
+    fn composite_counts_lineless_files_from_the_summary() {
+        let unit = target("JVM_UNIT", vec![file("pkg/A.kt", 0, 0, &[(1, 1), (2, 0)])]);
+        let mut rates_only = target("ANDROID_INSTRUMENTED", vec![file("pkg/B.kt", 0, 0, &[])]);
+        rates_only.lines_total = 10;
+        rates_only.lines_covered = 4;
+        rates_only.file_count = 1;
+
+        let composite = compute_composite(&[unit, rates_only]).unwrap();
+        assert_eq!(composite.lines_total, 12);
+        assert_eq!(composite.lines_covered, 5);
+        assert_eq!(composite.file_count, 2);
+        assert!(!composite.lines_are_union);
     }
 
     /// A union rate minus a summed previous rate is not a delta: with overlap
