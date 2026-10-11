@@ -810,21 +810,9 @@ that is not trustworthy cannot be evidence.
 | Locale-independent report formatting | `HtmlReportWriter uses a dot decimal separator regardless of locale`, verified to fail without the fix |
 | `docker build` and a health check | `dashboard.yml` |
 | Plugin compiles against real AGP | `plugin.yml` |
+| Android rig unit tests + report | `android.yml`, now gating. This step used to run until the job timeout. The unit tests were never the problem: with no device, `connectedDebugAndroidTest` failed and its finalizer `omnivorePullCoverage` ran `adb logcat`, which waits forever for a device. The pull and setup tasks now check `adb devices` first and bound every adb call; CI excludes the connected tests it has no emulator for. |
 
 ### Not verified, and what would verify it
-
-- **The Android rig's unit tests do not finish.** Found by the first real run
-  of `android.yml`: with the AGP transform steps green in 2m21s, the following
-  `./gradlew testDebugUnitTest omnivoreReport` ran **29 minutes without
-  completing**. The rig's test suite is small, and the equivalent run on the KMP
-  rig passes in `coverage.yml`, so this is neither slowness nor a general agent
-  fault — it is specific to the Android rig. The plugin attaches `-javaagent` to
-  every `Test` task, so the leading hypothesis is an agent defect (a shutdown
-  hook or flush that never returns) rather than a CI misconfiguration, but
-  nothing has been reproduced yet and that is a guess. The step is bounded at 12
-  minutes and marked advisory so it keeps producing a data point every run
-  without blocking merges; the timeout is the reproduction for whoever picks it
-  up. **This is the most concrete open defect in the tree.**
 
 - **Android instrumented tests on a device.** `android.yml` proves the transform
   runs and emits a probe map; it does not prove the on-device listener,
