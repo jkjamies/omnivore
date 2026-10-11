@@ -79,3 +79,22 @@ jobs:
           echo "dashboard did not become healthy"
           docker logs omnivore-ci
           exit 1
+
+      # The image runs as UID 10001, and the docs tell bind-mount users to
+      # chown the host directory to match. Prove that setup actually starts
+      # and can write the database.
+      - name: Smoke test with a bind mount
+        run: |
+          mkdir -p "$RUNNER_TEMP/omnivore-data"
+          sudo chown 10001:10001 "$RUNNER_TEMP/omnivore-data"
+          docker run -d --name omnivore-bind -p 3001:3000 \
+            -v "$RUNNER_TEMP/omnivore-data:/data" omnivore-dashboard:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3001/api/v1/health; then
+              test -f "$RUNNER_TEMP/omnivore-data/omnivore.db" && exit 0
+            fi
+            sleep 1
+          done
+          echo "dashboard did not become healthy with a bind-mounted /data"
+          docker logs omnivore-bind
+          exit 1
