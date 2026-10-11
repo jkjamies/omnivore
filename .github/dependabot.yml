@@ -12,6 +12,12 @@ updates:
     directory: "/coverage-plugin"
     schedule:
       interval: "weekly"
+    ignore:
+      # AGP is compileOnly and pinned to the oldest supported major on purpose:
+      # compiling against a newer one lets APIs slip in that crash on older AGP
+      # at runtime. Newer AGP is exercised by the Android test rig instead.
+      - dependency-name: "com.android.tools.build:gradle"
+        update-types: ["version-update:semver-major"]
 
   # Dashboard (Cargo/Rust)
   - package-ecosystem: "cargo"

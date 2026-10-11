@@ -23,7 +23,7 @@ omnivore-agent-tests/    Integration tests for the agent
 |---|---|---|
 | ASM | 9.9.1 | Bytecode analysis & transformation (core, tree, commons, util) |
 | kotlinx-serialization | 1.11.0 | JSON report generation |
-| AGP | 8.8.2 | Android Gradle Plugin integration (compileOnly) |
+| AGP | 8.8.2 | Android Gradle Plugin integration (compileOnly). Deliberately the oldest supported line: the plugin runs inside the consumer's AGP, so compiling against 8.x keeps 9.x-only APIs out. The Android rig runs AGP 9 to catch anything 9 removed. Dependabot ignores major bumps here. |
 | Kotlin | 2.3.21 | Language version |
 | JUnit 4 | 4.13.2 | `RunListener` for Android instrumented tests (compileOnly in agent) |
 | JUnit 5 | 6.0.3 | Testing |
