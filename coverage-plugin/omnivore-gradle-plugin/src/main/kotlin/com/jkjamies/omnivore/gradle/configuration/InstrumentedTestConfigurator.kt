@@ -6,6 +6,7 @@ import com.jkjamies.omnivore.gradle.transform.OmnivoreClassVisitorFactory
 import org.gradle.api.Project
 import java.io.File
 import java.util.Properties
+import java.util.concurrent.TimeUnit
 
 /**
  * Configures Android instrumented test tasks to collect Omnivore coverage data.
@@ -37,6 +38,9 @@ object InstrumentedTestConfigurator {
 
     /** Device-local directory where coverage data is written during instrumented tests. */
     private const val DEVICE_COVERAGE_DIR = "/data/local/tmp/omnivore"
+
+    /** Upper bound on any single adb invocation. Pulling coverage is seconds of work. */
+    private const val ADB_TIMEOUT_SECONDS = 120L
 
     /** Resource path for the version properties generated at plugin build time. */
     private const val VERSION_PROPS_RESOURCE = "omnivore-version.properties"
@@ -223,6 +227,10 @@ object InstrumentedTestConfigurator {
 
             task.doLast {
                 val adb = resolveAdb(project) ?: return@doLast
+                if (!hasConnectedDevice(adb)) {
+                    project.logger.warn("Omnivore: No Android device connected; skipping device setup.")
+                    return@doLast
+                }
                 // Create directory and make it world-writable so the app process can write
                 runCommand(adb, "shell", "mkdir", "-p", DEVICE_COVERAGE_DIR)
                 runCommand(adb, "shell", "chmod", "777", DEVICE_COVERAGE_DIR)
@@ -268,6 +276,14 @@ object InstrumentedTestConfigurator {
                     return@doLast
                 }
 
+                // adb waits indefinitely for a device to appear, so without this
+                // check a run with no device (CI without an emulator) hung here
+                // forever after connectedAndroidTest had already failed.
+                if (!hasConnectedDevice(adb)) {
+                    project.logger.warn("Omnivore: No Android device connected; no instrumented coverage to pull.")
+                    return@doLast
+                }
+
                 project.logger.lifecycle("Pulling Omnivore coverage data from device...")
 
                 var pulled = false
@@ -298,11 +314,10 @@ object InstrumentedTestConfigurator {
                                 val process = ProcessBuilder(
                                     adb, "exec-out", "run-as", packageName,
                                     "cat", "files/omnivore/$fileName"
-                                ).redirectErrorStream(false).start()
-                                destFile.outputStream().use { out ->
-                                    process.inputStream.use { it.copyTo(out) }
-                                }
-                                val exitCode = process.waitFor()
+                                ).redirectOutput(destFile)
+                                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                                    .start()
+                                val exitCode = awaitExit(process)
                                 if (exitCode == 0 && hasValidMagic(destFile)) {
                                     pulled = true
                                 } else {
@@ -351,11 +366,22 @@ object InstrumentedTestConfigurator {
      */
     private fun extractFromLogcat(project: Project, adb: String, outputDir: File): Boolean {
         try {
-            val process = ProcessBuilder(adb, "logcat", "-d", "-s", "System.err:W")
-                .redirectErrorStream(true)
-                .start()
-            val logcatOutput = process.inputStream.bufferedReader().readText()
-            process.waitFor()
+            // Captured to a file rather than read from the pipe, so a stuck adb
+            // can be timed out instead of blocking the read forever.
+            val logFile = File.createTempFile("omnivore-logcat", ".txt")
+            val logcatOutput = try {
+                val process = ProcessBuilder(adb, "logcat", "-d", "-s", "System.err:W")
+                    .redirectErrorStream(true)
+                    .redirectOutput(logFile)
+                    .start()
+                if (awaitExit(process) == -1) {
+                    project.logger.warn("Omnivore: adb logcat did not finish within ${ADB_TIMEOUT_SECONDS}s")
+                    return false
+                }
+                logFile.readText()
+            } finally {
+                logFile.delete()
+            }
 
             var extracted = false
 
@@ -600,14 +626,53 @@ object InstrumentedTestConfigurator {
      */
     private fun runCommand(vararg args: String): Int {
         return try {
-            ProcessBuilder(*args)
-                .inheritIO()
-                .start()
-                .waitFor()
+            awaitExit(ProcessBuilder(*args).inheritIO().start())
         } catch (_: Exception) {
             -1
         }
     }
+
+    /**
+     * Wait for [process] to exit, killing it after [ADB_TIMEOUT_SECONDS].
+     * Returns its exit code, or -1 if it had to be killed.
+     */
+    private fun awaitExit(process: Process): Int {
+        if (!process.waitFor(ADB_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            return -1
+        }
+        return process.exitValue()
+    }
+
+    /**
+     * Whether adb sees at least one device in the `device` state. `adb devices`
+     * returns immediately, unlike `logcat`/`shell`/`pull`, which wait for one.
+     */
+    private fun hasConnectedDevice(adb: String): Boolean {
+        val out = File.createTempFile("omnivore-adb-devices", ".txt")
+        return try {
+            val process = ProcessBuilder(adb, "devices")
+                .redirectErrorStream(true)
+                .redirectOutput(out)
+                .start()
+            awaitExit(process) == 0 && parseConnectedDevices(out.readText()).isNotEmpty()
+        } catch (_: Exception) {
+            false
+        } finally {
+            out.delete()
+        }
+    }
+
+    /**
+     * Serials from `adb devices` output that are ready for use. Devices that are
+     * `offline` or `unauthorized` are listed too, but adb commands against them
+     * fail or block, so they don't count.
+     */
+    internal fun parseConnectedDevices(adbDevicesOutput: String): List<String> =
+        adbDevicesOutput.lines()
+            .map { it.trim().split(Regex("\\s+")) }
+            .filter { it.size >= 2 && it[1] == "device" }
+            .map { it[0] }
 
     private fun loadExcludesFile(extension: OmnivoreExtension): List<String> {
         val file = extension.excludesFile.orNull ?: return emptyList()
