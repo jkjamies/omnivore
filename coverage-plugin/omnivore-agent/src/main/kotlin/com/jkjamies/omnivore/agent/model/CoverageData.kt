@@ -50,11 +50,35 @@ data class FileCoverage(
     val lineRate: Double,
     val branchRate: Double,
     val lines: List<LineCoverage>,
+    /**
+     * Branch edges covered and total for this file.
+     *
+     * Present so consumers can aggregate branch coverage *correctly*. Rolling a
+     * directory or project rate up from per-file `branchRate` values gives an
+     * unweighted mean, in which a 3-branch file counts as much as a 300-branch
+     * one. With these counts a consumer can sum and divide, which is the only
+     * aggregation that means anything.
+     *
+     * Default 0 so reports written by older plugin versions still deserialize.
+     */
+    val branchesCovered: Long = 0,
+    val branchesTotal: Long = 0,
 )
 
 @Serializable
 data class LineCoverage(
     val lineNumber: Int,
+    /**
+     * Times this line was executed, where the producing tool tracks that.
+     *
+     * The Omnivore agent uses boolean probes, so its values are only ever 0 or
+     * 1 — a probe records *that* a line ran, not how often. Counting would mean
+     * a read-modify-write on every probe, which is both slower and lossy under
+     * concurrency without atomics; JaCoCo makes the same tradeoff. Formats that
+     * do carry real counts (JaCoCo XML's `ci`) keep them, so consumers must
+     * treat this as "0 = uncovered, ≥1 = covered" and only surface an exact
+     * count when it is greater than 1.
+     */
     val hitCount: Long,
 )
 

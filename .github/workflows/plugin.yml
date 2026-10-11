@@ -16,6 +16,9 @@ on:
       - 'coverage-plugin/**'
       - '.github/workflows/plugin.yml'
 
+permissions:
+  contents: read
+
 defaults:
   run:
     working-directory: coverage-plugin

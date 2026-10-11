@@ -1,6 +1,7 @@
 package com.jkjamies.omnivore.gradle.tasks
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.*
@@ -31,8 +32,16 @@ abstract class OmnivoreUploadTask : DefaultTask() {
     @get:Input
     abstract val dashboardUrl: Property<String>
 
-    @get:Input
-    @get:Optional
+    /**
+     * API key sent as `X-API-Key`.
+     *
+     * Deliberately `@Internal` rather than `@Input`: Gradle hashes task inputs
+     * into the build cache key and records them in build scans and
+     * configuration-cache state, so annotating a credential as an input writes
+     * it to disk (and potentially publishes it). This task has no outputs and
+     * always runs, so the token was never needed for up-to-date checks anyway.
+     */
+    @get:Internal
     abstract val authToken: Property<String>
 
     init {
@@ -54,18 +63,30 @@ abstract class OmnivoreUploadTask : DefaultTask() {
             .toList()
 
         if (reportFiles.isEmpty()) {
-            throw TaskExecutionException(
-                this,
-                RuntimeException("No report files found in ${dir.absolutePath}. Run omnivoreReport first.")
-            )
+            throw GradleException("No report files found in ${dir.absolutePath}. Run omnivoreReport first.")
         }
 
         val endpoint = "$url/api/v1/ingest/coverage"
+
+        // Coverage reports carry full source paths and, with an API key, a
+        // credential. Neither belongs on a plaintext connection to anything but
+        // a local dashboard.
+        val scheme = runCatching { URI(url).scheme }.getOrNull()
+        if (scheme.equals("http", ignoreCase = true) && !isLoopback(url)) {
+            val detail = if (authToken.isPresent) " The API key would be sent in clear text." else ""
+            logger.warn("Omnivore: uploading to $url over plain HTTP.$detail Use https:// for a remote dashboard.")
+        }
 
         for (file in reportFiles) {
             logger.lifecycle("Uploading ${file.name} to $endpoint")
             uploadFile(file, endpoint)
         }
+    }
+
+    private fun isLoopback(url: String): Boolean {
+        val host = runCatching { URI(url).host }.getOrNull() ?: return false
+        return host.equals("localhost", ignoreCase = true) ||
+            host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 
     private fun uploadFile(file: File, endpoint: String) {
