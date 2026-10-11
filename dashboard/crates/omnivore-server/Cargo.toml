@@ -2,6 +2,7 @@
 name = "omnivore-server"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "omnivore_server"

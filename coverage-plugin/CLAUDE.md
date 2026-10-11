@@ -21,12 +21,12 @@ omnivore-agent-tests/    Integration tests for the agent
 
 | Dependency | Version | Purpose |
 |---|---|---|
-| ASM | 9.7.1 | Bytecode analysis & transformation (core, tree, commons, util) |
-| kotlinx-serialization | 1.8.0 | JSON report generation |
+| ASM | 9.9.1 | Bytecode analysis & transformation (core, tree, commons, util) |
+| kotlinx-serialization | 1.11.0 | JSON report generation |
 | AGP | 8.8.2 | Android Gradle Plugin integration (compileOnly) |
-| Kotlin | 2.1.10 | Language version |
+| Kotlin | 2.3.21 | Language version |
 | JUnit 4 | 4.13.2 | `RunListener` for Android instrumented tests (compileOnly in agent) |
-| JUnit 5 | 5.11.4 | Testing |
+| JUnit 5 | 6.0.3 | Testing |
 | Java toolchain | 17 | Target JVM |
 
 Version catalog: `gradle/libs.versions.toml`
