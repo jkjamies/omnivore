@@ -14,6 +14,9 @@ on:
       - 'dashboard/**'
       - '.github/workflows/dashboard.yml'
 
+permissions:
+  contents: read
+
 defaults:
   run:
     working-directory: dashboard

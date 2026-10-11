@@ -85,10 +85,7 @@ class OmnivoreClassTransformer(
         }
 
         // Check Compose-generated class patterns
-        if (config.composeFilterEnabled &&
-            (ComposeDetector.isGeneratedClass(className) ||
-                ComposeDetector.matchesExcludePattern(className, config.composeExcludePatterns))
-        ) {
+        if (ComposeDetector.isExcludedClass(className, config)) {
             InstrumentationStats.skipped(InstrumentationStats.SkipReason.COMPOSE)
             return null
         }
