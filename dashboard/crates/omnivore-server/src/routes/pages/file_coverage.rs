@@ -121,15 +121,39 @@ pub async fn file_source_fragment(
 
     let mut file = find_file_across_targets(&db, &project_id, &file_path).await?;
 
+    // Source viewing is gated separately from coverage numbers. This endpoint
+    // reaches into GitHub with a *token* — the caller's if they are logged in,
+    // otherwise the server's — and caches whatever comes back. Left ungated it
+    // is a confused deputy: an anonymous visitor triggers a fetch that spends
+    // the server's credentials, private repository source lands in
+    // `source_cache`, and every later visitor is served it straight from the
+    // cache. So when OAuth is configured, require a session before either
+    // reading the cache or filling it.
+    let viewer = if auth::oauth_enabled() {
+        match auth::extract_user(&db, &jar).await {
+            Some(user) => Some(user),
+            None => return Err(StatusCode::UNAUTHORIZED),
+        }
+    } else {
+        None
+    };
+
     if let Some(repo) = &project.github_repo {
         let commit_ref = "";
         if let Ok(Some(cached)) = db.get_cached_source(repo, &file_path, commit_ref).await {
             file.source_content = Some(cached);
         } else {
-            // Prefer the logged-in user's GitHub token, fall back to server GITHUB_TOKEN
-            let user = auth::extract_user(&db, &jar).await;
+            // Prefer the logged-in user's token so the fetch carries that
+            // user's own repository access. Fall back to the server token only
+            // when OAuth is off — i.e. when the operator has already declared
+            // the whole instance open.
+            let user = viewer;
             let user_token = user.as_ref().map(|u| u.github_token.clone());
-            let env_token = std::env::var("GITHUB_TOKEN").ok();
+            let env_token = if user.is_some() {
+                None
+            } else {
+                std::env::var("GITHUB_TOKEN").ok()
+            };
             let effective_token = user_token.as_deref().or(env_token.as_deref());
 
             if let Some(ref u) = user {
