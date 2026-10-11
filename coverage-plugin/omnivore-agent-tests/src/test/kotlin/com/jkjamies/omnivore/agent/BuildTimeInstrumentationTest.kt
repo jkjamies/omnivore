@@ -92,7 +92,7 @@ class BuildTimeInstrumentationTest {
         probeMap: ProbeMap? = null,
     ): ByteArray {
         val transformer = OmnivoreClassTransformer(dataStore, probeMap, config)
-        return transformer.transform(null, internalName, null, null, bytecode)
+        return transformer.transform(javaClass.classLoader, internalName, null, null, bytecode)
             ?: error("$internalName was not instrumented by the load-time path")
     }
 
