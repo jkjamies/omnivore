@@ -3,17 +3,20 @@ package com.jkjamies.omnivore.gradle.tasks
 import com.jkjamies.omnivore.agent.model.CoverageTarget
 import com.jkjamies.omnivore.agent.model.DependencyGraph
 import com.jkjamies.omnivore.agent.model.FileCoverage
+import com.jkjamies.omnivore.agent.instrumentation.GlobPattern
 import com.jkjamies.omnivore.agent.reporter.CoverageAnalyzer
 import com.jkjamies.omnivore.agent.reporter.HtmlReportWriter
 import com.jkjamies.omnivore.agent.reporter.JsonReportWriter
 import com.jkjamies.omnivore.agent.reporter.MarkdownReportWriter
 import com.jkjamies.omnivore.agent.runtime.ExecutionDataReader
 import com.jkjamies.omnivore.agent.runtime.ExecutionDataStore
+import com.jkjamies.omnivore.agent.runtime.InstrumentationStatsIo
 import com.jkjamies.omnivore.agent.runtime.ProbeMap
 import com.jkjamies.omnivore.agent.runtime.ProbeMapReader
 import com.jkjamies.omnivore.gradle.GraphFormat
 import com.jkjamies.omnivore.gradle.configuration.DependencyGraphWriter
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
@@ -260,7 +263,7 @@ abstract class OmnivoreReportTask : DefaultTask() {
         }
 
         // Print output
-        printReport(targets, depGraph, reportFormats, outputDir)
+        printReport(targets, depGraph, reportFormats, outputDir, readInstrumentationSummary(dataDir))
     }
 
     private fun mergeData(
@@ -268,28 +271,152 @@ abstract class OmnivoreReportTask : DefaultTask() {
         probeFiles: List<File>,
     ): Pair<ExecutionDataStore, ProbeMap> {
         val store = ExecutionDataStore()
+        var mismatchedClasses = 0
         for (execFile in execFiles) {
             val fileStore = ExecutionDataReader.read(execFile)
             for (data in fileStore.getAllData()) {
+                // Taken before getOrCreateProbes, which grows the stored array
+                // to the larger size: comparing afterwards misses the case
+                // where the later file has more probes.
+                val previousSize = store.getData(data.classId)?.probes?.size
                 val probes = store.getOrCreateProbes(data.classId, data.className, data.probes.size)
-                for (i in data.probes.indices) {
+                // Probe arrays for the same class can differ in length across
+                // files: a class ID is a hash of the class *name*, so a stale
+                // .omnivore file from before a recompile is keyed identically
+                // but was instrumented with a different probe count. Copying
+                // blind used to throw ArrayIndexOutOfBoundsException and fail
+                // the whole report; clamp to the shorter array instead and
+                // report how much was skipped.
+                if (previousSize != null && previousSize != data.probes.size) {
+                    mismatchedClasses++
+                    logger.debug(
+                        "Omnivore: probe count mismatch for {} ({} vs {}) — merging the common prefix",
+                        data.className, data.probes.size, previousSize,
+                    )
+                }
+                val shared = minOf(data.probes.size, probes.size)
+                for (i in 0 until shared) {
                     if (data.probes[i]) probes[i] = true
                 }
             }
         }
+        if (mismatchedClasses > 0) {
+            logger.warn(
+                "Omnivore: $mismatchedClasses class(es) had inconsistent probe counts across execution " +
+                    "data files. This usually means stale data from a previous build — run a clean " +
+                    "build if coverage looks wrong."
+            )
+        }
         val probeMap = ProbeMap()
+        // What each (class, probe index) was first seen to mean, so a second
+        // probe file that disagrees is caught rather than silently losing to
+        // whichever file the directory walk happened to visit first.
+        val seenProbes = mutableMapOf<Long, MutableMap<Int, String>>()
+        val conflicting = mutableMapOf<Long, String>()
+        val unreadableProbeFiles = mutableListOf<String>()
         for (probeFile in probeFiles) {
-            val fileProbeMap = ProbeMapReader.read(probeFile)
+            // A probe map written by an older Omnivore is rejected by the
+            // reader, because v3 moved branch probes onto control-flow edges
+            // and the indices no longer mean the same thing. Skip the file
+            // rather than letting the exception abort the whole report: one
+            // stale artifact in build/ should not make the task unrunnable,
+            // and the guard below still fails loudly if nothing usable is left.
+            val fileProbeMap = try {
+                ProbeMapReader.read(probeFile)
+            } catch (e: Exception) {
+                unreadableProbeFiles += "${probeFile.name}: ${e.message}"
+                continue
+            }
             for (classMap in fileProbeMap.getAllClassMaps()) {
                 val target = probeMap.getOrCreateClassMap(
                     classMap.classId, classMap.className, classMap.sourceFile
                 )
+                val seen = seenProbes.getOrPut(classMap.classId) { mutableMapOf() }
                 for (probe in classMap.getProbes()) {
-                    target.addProbe(probe.probeIndex, probe.lineNumber, probe.methodName, probe.methodDesc, probe.type)
+                    // Two probe files can describe the same class (multiple test
+                    // tasks writing into the same directory). Adding an entry
+                    // per occurrence double-counted every branch, since the
+                    // analyzer counts one branch per BRANCH entry.
+                    val meaning = "${probe.lineNumber}|${probe.methodName}|${probe.methodDesc}|${probe.type}"
+                    val previous = seen.putIfAbsent(probe.probeIndex, meaning)
+                    if (previous != null) {
+                        if (previous != meaning) conflicting[classMap.classId] = classMap.className
+                        continue
+                    }
+                    target.addProbe(
+                        probe.probeIndex,
+                        probe.lineNumber,
+                        probe.methodName,
+                        probe.methodDesc,
+                        probe.type,
+                        // isComposable and branchGroup were being dropped here.
+                        // Losing isComposable silently disabled the "auto-exclude
+                        // pure Compose classes" filter, because
+                        // isAllMethodsComposable() can never be true once every
+                        // entry says false.
+                        probe.isComposable,
+                        probe.branchGroup,
+                    )
                 }
             }
         }
+
+        if (unreadableProbeFiles.isNotEmpty()) {
+            logger.warn(
+                "Omnivore: skipped ${unreadableProbeFiles.size} unreadable probe map(s):\n  " +
+                    unreadableProbeFiles.joinToString("\n  ")
+            )
+        }
+        if (probeFiles.isNotEmpty() && unreadableProbeFiles.size == probeFiles.size) {
+            throw GradleException(
+                "No usable probe maps: all ${probeFiles.size} .probes file(s) were written by a " +
+                    "different version of Omnivore. Run a clean build to regenerate coverage data."
+            )
+        }
+
+        // Same class, same probe index, different source location: the probe
+        // maps come from different builds of that class, and there is no way
+        // to tell which one the execution data was recorded against.
+        for (classId in conflicting.keys) probeMap.removeClassMap(classId)
+        if (conflicting.isNotEmpty()) {
+            logger.warn(
+                "Omnivore: dropped ${conflicting.size} class(es) whose probe maps disagree across " +
+                    "files (e.g. ${conflicting.values.take(3).joinToString()}), which means they came " +
+                    "from different builds. Run a clean build to include them."
+            )
+        }
+
+        dropStaleClasses(store, probeMap)
         return store to probeMap
+    }
+
+    /**
+     * Drop classes whose probe map and execution data disagree on probe count.
+     *
+     * Class IDs are derived from the class *name*, so execution data left over
+     * from before a recompile keys to the same entry as the current probe map
+     * while describing a different instrumentation. Correlating them produces
+     * coverage attributed to the wrong source lines — plausible-looking numbers
+     * with nothing to indicate they are wrong. Dropping the class is the honest
+     * outcome; the warning points at the fix.
+     */
+    private fun dropStaleClasses(store: ExecutionDataStore, probeMap: ProbeMap) {
+        val stale = mutableListOf<String>()
+        for (classMap in probeMap.getAllClassMaps()) {
+            val data = store.getData(classMap.classId) ?: continue
+            val mappedProbes = classMap.getProbes().size
+            if (mappedProbes > data.probes.size) {
+                stale += classMap.className
+                probeMap.removeClassMap(classMap.classId)
+            }
+        }
+        if (stale.isNotEmpty()) {
+            logger.warn(
+                "Omnivore: dropped ${stale.size} class(es) whose execution data predates the current " +
+                    "instrumentation (e.g. ${stale.take(3).joinToString()}). Run a clean build to " +
+                    "include them."
+            )
+        }
     }
 
     /**
@@ -352,29 +479,29 @@ abstract class OmnivoreReportTask : DefaultTask() {
         }
     }
 
-    private fun patternMatches(pattern: String, text: String): Boolean {
-        return if (pattern.startsWith("regex:")) {
-            Regex(pattern.removePrefix("regex:")).matches(text)
-        } else {
-            globMatches(pattern, text)
-        }
-    }
-
-    private fun globMatches(pattern: String, text: String): Boolean {
-        val regex = pattern
-            .replace(".", "\\.")
-            .replace("*", ".*")
-            .replace("?", ".")
-        return Regex(regex).matches(text)
-    }
+    private fun patternMatches(pattern: String, text: String): Boolean =
+        GlobPattern.matches(pattern, text)
 
     // -- Pretty output --
+
+    /**
+     * Aggregate the `.stats` files the agent wrote in each test JVM.
+     *
+     * Returns null when there are none, which is the case for a purely
+     * build-time-instrumented (Android) run.
+     */
+    private fun readInstrumentationSummary(dataDir: File): InstrumentationStatsIo.Summary? =
+        dataDir.walkTopDown()
+            .filter { it.isFile && it.extension == InstrumentationStatsIo.EXTENSION }
+            .mapNotNull { InstrumentationStatsIo.read(it) }
+            .reduceOrNull { acc, next -> acc + next }
 
     private fun printReport(
         targets: List<TargetCoverage>,
         depGraph: DependencyGraph?,
         reportFormats: List<String>,
         outputDir: File,
+        instrumentation: InstrumentationStatsIo.Summary?,
     ) {
         val out = services.get(StyledTextOutputFactory::class.java)
             .create("omnivore")
@@ -393,6 +520,34 @@ abstract class OmnivoreReportTask : DefaultTask() {
         // Dependency graph
         if (depGraph != null && depGraph.modules.isNotEmpty()) {
             out.style(Style.Description).text("  Dependencies: ${depGraph.modules.size} modules, ${depGraph.edges.size} edges").println()
+        }
+
+        // Instrumentation summary. A class can drop out of coverage for
+        // several unrelated reasons, each of which used to be a silent
+        // `return null` in the transformer — so print what actually happened
+        // rather than leaving the user to infer it from a low percentage.
+        if (instrumentation != null) {
+            val line = buildString {
+                append("  Instrumented: ${instrumentation.instrumented} classes")
+                if (instrumentation.totalSkipped > 0) {
+                    append(", skipped ${instrumentation.totalSkipped} (${instrumentation.describeSkips()})")
+                }
+            }
+            out.style(Style.Description).text(line).println()
+
+            if (instrumentation.failures.isNotEmpty()) {
+                out.style(Style.Failure)
+                    .text("  ${instrumentation.failures.size} class(es) failed to instrument:")
+                    .println()
+                for ((className, message) in instrumentation.failures.entries.take(5)) {
+                    out.style(Style.Failure).text("    $className: $message").println()
+                }
+            }
+            if (instrumentation.instrumented == 0) {
+                out.style(Style.Failure)
+                    .text("  No classes were instrumented — coverage will be empty. Check your includes/excludes.")
+                    .println()
+            }
         }
 
         // Reports

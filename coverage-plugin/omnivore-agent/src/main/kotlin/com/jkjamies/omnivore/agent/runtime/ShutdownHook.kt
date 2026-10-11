@@ -27,6 +27,17 @@ object ShutdownHook {
                 )
                 ProbeMapWriter.write(probeMapFile, probeMap)
             }
+
+            // Written unconditionally, including when nothing was instrumented
+            // — "0 classes instrumented, 812 skipped (812 runtime not visible)"
+            // is precisely the case a user most needs to see, and it is the case
+            // where there is no execution data to write.
+            InstrumentationStatsIo.write(
+                File(
+                    config.destFile.parentFile,
+                    config.destFile.nameWithoutExtension + "." + InstrumentationStatsIo.EXTENSION
+                )
+            )
         }, "omnivore-shutdown-hook"))
     }
 }

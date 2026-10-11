@@ -53,4 +53,14 @@ class ComposeDetectorTest {
             )
         )
     }
+
+    @Test
+    fun `class exclusion applies the default patterns and honours the switch`() {
+        val lambdaClass = "com/example/MainActivityKt\$lambda-1"
+        // Not caught by the generated-class markers alone, only by the defaults.
+        assertFalse(ComposeDetector.isGeneratedClass(lambdaClass))
+        assertTrue(ComposeDetector.isExcludedClass(lambdaClass, AgentConfig()))
+        assertFalse(ComposeDetector.isExcludedClass(lambdaClass, AgentConfig(composeFilterEnabled = false)))
+        assertFalse(ComposeDetector.isExcludedClass("com/example/UserRepo", AgentConfig()))
+    }
 }
