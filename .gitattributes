@@ -1,0 +1,3 @@
+# Database::schema_statements splits schema.sql on ";\n". A CRLF checkout would
+# leave no separators, so only the first CREATE TABLE would run.
+dashboard/crates/omnivore-core/schema.sql text eol=lf

@@ -32,16 +32,17 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Run as a non-root user; /data is the only path the server writes to.
+# The server runs as this non-root user; /data is the only path it writes to.
+# The entrypoint starts as root just to re-own /data, then drops to it.
 RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin omnivore
 
 COPY --from=builder /app/target/release/omnivore-dashboard /usr/local/bin/
 COPY --from=builder /app/crates/omnivore-server/static /opt/omnivore/static
+COPY docker-entrypoint.sh /usr/local/bin/
 
 RUN mkdir -p /data && chown omnivore:omnivore /data
 VOLUME ["/data"]
 WORKDIR /data
-USER omnivore
 EXPOSE 3000
 
 ENV DATABASE_URL="sqlite:/data/omnivore.db?mode=rwc"
@@ -49,4 +50,5 @@ ENV BIND_ADDR="0.0.0.0:3000"
 ENV RUST_LOG="info"
 ENV OMNIVORE_STATIC_DIR="/opt/omnivore/static"
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["omnivore-dashboard"]

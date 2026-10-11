@@ -100,6 +100,10 @@ The SQLite database lives at `/data/omnivore.db` inside the container. **Always 
 -v /path/on/host:/data
 ```
 
+The server runs as a non-root user, **UID 10001**. On startup the container re-owns anything in `/data` that UID 10001 doesn't own, then drops root before the server starts, so bind mounts and volumes created by older root-run images work without a manual `chown`.
+
+If you start the container with `--user`, that step is skipped and the mounted directory must already be writable by the user you chose.
+
 ## Docker Compose
 
 ```yaml
