@@ -51,7 +51,11 @@ pub fn is_enabled() -> bool {
 }
 
 fn key_material() -> Option<Key> {
-    let raw = std::env::var("OMNIVORE_SECRET_KEY").ok()?;
+    derive_key(&std::env::var("OMNIVORE_SECRET_KEY").ok()?)
+}
+
+/// Turn the configured passphrase into a key; `None` when it is blank.
+fn derive_key(raw: &str) -> Option<Key> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
@@ -67,11 +71,16 @@ fn key_material() -> Option<Key> {
 /// Encrypt a secret for storage. Returns the value unchanged when encryption is
 /// not configured, so callers can always write the result directly.
 pub fn encrypt(plaintext: &str) -> String {
-    let Some(key) = key_material() else {
+    encrypt_with(key_material().as_ref(), plaintext)
+}
+
+/// [`encrypt`] with an explicit key, so tests need not touch process env.
+fn encrypt_with(key: Option<&Key>, plaintext: &str) -> String {
+    let Some(key) = key else {
         return plaintext.to_string();
     };
 
-    let cipher = ChaCha20Poly1305::new(&key);
+    let cipher = ChaCha20Poly1305::new(key);
     let mut nonce_bytes = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce_bytes).expect("system RNG unavailable");
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -98,11 +107,16 @@ pub fn encrypt(plaintext: &str) -> String {
 /// Decrypt a stored secret. Untagged values are returned as-is, which is what
 /// makes rows written before encryption was enabled keep working.
 pub fn decrypt(stored: &str) -> Result<String, CryptoError> {
+    decrypt_with(key_material().as_ref(), stored)
+}
+
+/// [`decrypt`] with an explicit key, so tests need not touch process env.
+fn decrypt_with(key: Option<&Key>, stored: &str) -> Result<String, CryptoError> {
     let Some(encoded) = stored.strip_prefix(PREFIX) else {
         return Ok(stored.to_string());
     };
 
-    let key = key_material().ok_or(CryptoError::MissingKey)?;
+    let key = key.ok_or(CryptoError::MissingKey)?;
     let payload = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|_| CryptoError::Malformed)?;
@@ -111,7 +125,7 @@ pub fn decrypt(stored: &str) -> Result<String, CryptoError> {
     }
 
     let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
-    let cipher = ChaCha20Poly1305::new(&key);
+    let cipher = ChaCha20Poly1305::new(key);
     let plaintext = cipher
         .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
         .map_err(|_| CryptoError::Undecryptable)?;
@@ -123,71 +137,57 @@ pub fn decrypt(stored: &str) -> Result<String, CryptoError> {
 mod tests {
     use super::*;
 
-    /// These tests mutate process-wide environment state, so they must not run
-    /// concurrently with each other.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn with_key<T>(key: Option<&str>, f: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            match key {
-                Some(k) => std::env::set_var("OMNIVORE_SECRET_KEY", k),
-                None => std::env::remove_var("OMNIVORE_SECRET_KEY"),
-            }
-        }
-        let result = f();
-        unsafe {
-            std::env::remove_var("OMNIVORE_SECRET_KEY");
-        }
-        result
+    // Keys are passed in rather than set in the environment: process env is
+    // shared by every test in the binary, and a lock only orders the tests
+    // that remember to take it.
+    fn key(passphrase: &str) -> Option<Key> {
+        derive_key(passphrase)
     }
 
     #[test]
     fn round_trips_with_a_key() {
-        with_key(Some("correct horse battery staple"), || {
-            let stored = encrypt("ghp_secret");
-            assert!(stored.starts_with(PREFIX), "should be tagged: {stored}");
-            assert!(!stored.contains("ghp_secret"), "plaintext must not survive");
-            assert_eq!(decrypt(&stored).unwrap(), "ghp_secret");
-        });
+        let k = key("correct horse battery staple");
+        let stored = encrypt_with(k.as_ref(), "ghp_secret");
+        assert!(stored.starts_with(PREFIX), "should be tagged: {stored}");
+        assert!(!stored.contains("ghp_secret"), "plaintext must not survive");
+        assert_eq!(decrypt_with(k.as_ref(), &stored).unwrap(), "ghp_secret");
     }
 
     #[test]
     fn is_a_no_op_without_a_key() {
-        with_key(None, || {
-            assert_eq!(encrypt("ghp_secret"), "ghp_secret");
-            assert_eq!(decrypt("ghp_secret").unwrap(), "ghp_secret");
-        });
+        assert_eq!(encrypt_with(None, "ghp_secret"), "ghp_secret");
+        assert_eq!(decrypt_with(None, "ghp_secret").unwrap(), "ghp_secret");
+        assert!(key("   ").is_none(), "a blank passphrase means no encryption");
     }
 
     #[test]
     fn plaintext_rows_still_decrypt_after_enabling_encryption() {
         // The upgrade path: rows written before a key was configured must keep
         // working, or enabling encryption logs every existing user out.
-        with_key(Some("k"), || {
-            assert_eq!(decrypt("ghp_written_before_encryption").unwrap(), "ghp_written_before_encryption");
-        });
+        assert_eq!(
+            decrypt_with(key("k").as_ref(), "ghp_written_before_encryption").unwrap(),
+            "ghp_written_before_encryption"
+        );
     }
 
     #[test]
     fn encrypted_rows_fail_loudly_if_the_key_goes_away() {
-        let stored = with_key(Some("k"), || encrypt("ghp_secret"));
-        with_key(None, || {
-            assert!(matches!(decrypt(&stored), Err(CryptoError::MissingKey)));
-        });
+        let stored = encrypt_with(key("k").as_ref(), "ghp_secret");
+        assert!(matches!(decrypt_with(None, &stored), Err(CryptoError::MissingKey)));
     }
 
     #[test]
     fn wrong_key_is_rejected_rather_than_returning_garbage() {
-        let stored = with_key(Some("right"), || encrypt("ghp_secret"));
-        with_key(Some("wrong"), || {
-            assert!(matches!(decrypt(&stored), Err(CryptoError::Undecryptable)));
-        });
+        let stored = encrypt_with(key("right").as_ref(), "ghp_secret");
+        assert!(matches!(
+            decrypt_with(key("wrong").as_ref(), &stored),
+            Err(CryptoError::Undecryptable)
+        ));
     }
 
     #[test]
     fn tampering_is_detected() {
-        let stored = with_key(Some("k"), || encrypt("ghp_secret"));
+        let stored = encrypt_with(key("k").as_ref(), "ghp_secret");
         let mut bytes = base64::engine::general_purpose::STANDARD
             .decode(stored.strip_prefix(PREFIX).unwrap())
             .unwrap();
@@ -197,19 +197,19 @@ mod tests {
             "{PREFIX}{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         );
-        with_key(Some("k"), || {
-            assert!(matches!(decrypt(&tampered), Err(CryptoError::Undecryptable)));
-        });
+        assert!(matches!(
+            decrypt_with(key("k").as_ref(), &tampered),
+            Err(CryptoError::Undecryptable)
+        ));
     }
 
     #[test]
     fn nonce_is_per_record() {
-        with_key(Some("k"), || {
-            assert_ne!(
-                encrypt("same"),
-                encrypt("same"),
-                "identical plaintexts must not produce identical ciphertexts"
-            );
-        });
+        let k = key("k");
+        assert_ne!(
+            encrypt_with(k.as_ref(), "same"),
+            encrypt_with(k.as_ref(), "same"),
+            "identical plaintexts must not produce identical ciphertexts"
+        );
     }
 }

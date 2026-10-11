@@ -77,6 +77,11 @@ impl Database {
     /// The environment decides this for a real server; this exists so a test
     /// can pin the setting on one `Database` without mutating process state
     /// that every other concurrently-running test also reads.
+    /// Whether ingest may create a project it has not seen before.
+    pub fn allows_project_autocreate(&self) -> bool {
+        self.allow_project_autocreate
+    }
+
     pub fn with_project_autocreate(mut self, allowed: bool) -> Self {
         self.allow_project_autocreate = allowed;
         self
