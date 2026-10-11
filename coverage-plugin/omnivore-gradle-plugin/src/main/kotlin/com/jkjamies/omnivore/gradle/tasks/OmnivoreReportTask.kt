@@ -275,6 +275,10 @@ abstract class OmnivoreReportTask : DefaultTask() {
         for (execFile in execFiles) {
             val fileStore = ExecutionDataReader.read(execFile)
             for (data in fileStore.getAllData()) {
+                // Taken before getOrCreateProbes, which grows the stored array
+                // to the larger size: comparing afterwards misses the case
+                // where the later file has more probes.
+                val previousSize = store.getData(data.classId)?.probes?.size
                 val probes = store.getOrCreateProbes(data.classId, data.className, data.probes.size)
                 // Probe arrays for the same class can differ in length across
                 // files: a class ID is a hash of the class *name*, so a stale
@@ -283,11 +287,11 @@ abstract class OmnivoreReportTask : DefaultTask() {
                 // blind used to throw ArrayIndexOutOfBoundsException and fail
                 // the whole report; clamp to the shorter array instead and
                 // report how much was skipped.
-                if (data.probes.size != probes.size) {
+                if (previousSize != null && previousSize != data.probes.size) {
                     mismatchedClasses++
                     logger.debug(
                         "Omnivore: probe count mismatch for {} ({} vs {}) — merging the common prefix",
-                        data.className, data.probes.size, probes.size,
+                        data.className, data.probes.size, previousSize,
                     )
                 }
                 val shared = minOf(data.probes.size, probes.size)
@@ -363,7 +367,7 @@ abstract class OmnivoreReportTask : DefaultTask() {
                     unreadableProbeFiles.joinToString("\n  ")
             )
         }
-        if (probeMap.isEmpty()) {
+        if (probeFiles.isNotEmpty() && unreadableProbeFiles.size == probeFiles.size) {
             throw GradleException(
                 "No usable probe maps: all ${probeFiles.size} .probes file(s) were written by a " +
                     "different version of Omnivore. Run a clean build to regenerate coverage data."
