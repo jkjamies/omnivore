@@ -74,45 +74,18 @@ jobs:
           fi
           echo "Build-time probe map: $SIZE bytes"
 
-      # Advisory, and bounded, because it currently does not finish.
+      # This runner has no emulator, so the connected (instrumented) tests that
+      # `omnivoreReport` depends on when `instrumentedTests` is enabled are
+      # excluded; the report covers the unit tests only.
       #
-      # On its first CI run this step ran for 29 minutes without completing,
-      # while the two steps above — the ones this job exists for — passed in
-      # 2m21s. The Android rig's unit tests are small; half an hour is a hang,
-      # not slowness. The JVM agent attaches `-javaagent` to every `Test` task,
-      # so this may be an agent defect rather than a CI problem, which makes it
-      # worth keeping visible rather than deleting. The equivalent run on the
-      # KMP rig (`coverage.yml`) passes, so whatever this is, it is specific to
-      # the Android rig.
-      #
-      # Blocking on it would block every merge on an unrelated open question.
-      # Bounded + advisory keeps a data point coming from every run: if it
-      # starts passing, drop the two lines below; if it keeps timing out, the
-      # timeout is the reproduction.
-      #
-      # Tracked in docs/CODEBASE-REVIEW.md, Part 4.
-      - name: Run unit tests and generate a report (advisory — see note)
-        id: android_unit_tests
+      # This step used to hang until the job timed out. The unit tests were
+      # fine: connectedDebugAndroidTest failed for want of a device, and its
+      # finalizer omnivorePullCoverage then ran `adb logcat`, which waits
+      # forever for a device. The plugin now checks for one first.
+      - name: Run unit tests and generate a report
         working-directory: test-rigs/android-test-rig
         timeout-minutes: 12
-        continue-on-error: true
-        run: ./gradlew testDebugUnitTest omnivoreReport --stacktrace
-
-      # `continue-on-error` makes GitHub report the step's *conclusion* as
-      # success, so without this the hang is invisible in the UI — the whole
-      # point of keeping the step was to stay informed by it. `outcome` holds
-      # the real result, so surface it as an annotation on the run.
-      - name: Surface the advisory result
-        if: always()
-        run: |
-          if [ "${{ steps.android_unit_tests.outcome }}" = "failure" ]; then
-            echo "::warning title=Android rig unit tests still not finishing::\
-          Timed out after 12 minutes. Known open defect — see docs/CODEBASE-REVIEW.md Part 4."
-          else
-            echo "::notice title=Android rig unit tests completed::\
-          This step has been failing; if it now passes consistently, drop the \
-          timeout/continue-on-error from android.yml and update CODEBASE-REVIEW.md Part 4."
-          fi
+        run: ./gradlew testDebugUnitTest omnivoreReport -x connectedDebugAndroidTest --stacktrace
 
       - name: Upload artifacts
         if: always()
