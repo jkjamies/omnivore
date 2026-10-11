@@ -41,7 +41,7 @@ Tracks which features exist in the project and which tier they belong to. Featur
 | Instrumentation diagnostics (why classes were skipped, printed by `omnivoreReport`) | Built |
 | Ingest rate limiting (`OMNIVORE_INGEST_RATE_LIMIT`) | Built |
 | Optional login-to-view (`OMNIVORE_REQUIRE_LOGIN_TO_VIEW`) | Built |
-| Session token encryption at rest (`OMNIVORE_SECRET_KEY`) | Built |
+| Session token encryption at rest (opt-in via `OMNIVORE_SECRET_KEY`; plaintext without it) | Built |
 | CSRF protection on settings forms | Built |
 | Configurable CORS allowlist, CSP and security headers | Built |
 | Background maintenance (expired sessions, permission cache, stale source blobs) | Built |

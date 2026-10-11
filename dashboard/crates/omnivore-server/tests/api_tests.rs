@@ -1373,6 +1373,11 @@ async fn implausible_line_numbers_are_dropped_at_ingest() {
     );
     // Line 7 is real, so the page still goes up to it.
     assert!(page.contains(">7<"), "the plausible line should still render");
+
+    // Stored totals describe the records that were kept, not the raw upload.
+    let snapshot = db.get_latest_snapshot("line-bomb").await.unwrap().unwrap();
+    assert_eq!((snapshot.lines_covered, snapshot.lines_total), (1, 1));
+    assert_eq!(snapshot.line_rate, 1.0);
 }
 
 /// The trend embed is an image, so it cannot answer 300. With several series

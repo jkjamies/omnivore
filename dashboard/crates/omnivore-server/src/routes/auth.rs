@@ -25,9 +25,16 @@ const OAUTH_STATE_COOKIE: &str = "omnivore_oauth_state";
 const DEFAULT_OAUTH_SCOPES: &str = "read:user,read:org";
 
 fn oauth_scopes() -> String {
+    // Normalise "read:user, repo" or "read:user repo" to "read:user,repo" so a
+    // stray space doesn't become part of a scope name.
     std::env::var("OMNIVORE_GITHUB_SCOPES")
         .ok()
-        .map(|s| s.trim().to_string())
+        .map(|s| {
+            s.split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|scope| !scope.is_empty())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| DEFAULT_OAUTH_SCOPES.to_string())
 }

@@ -55,17 +55,19 @@ runs:
         # API key or a GitHub token to a plaintext endpoint — the server URL
         # usually comes from a repository variable, which is a weaker thing to
         # edit than a secret.
-        case "$INPUT_SERVER" in
-          https://*) ;;
-          http://localhost*|http://127.0.0.1*) ;;
-          *)
-            if [ -n "$INPUT_API_KEY" ] || [ -n "$INPUT_GITHUB_TOKEN" ]; then
-              echo "::error::Refusing to send credentials to a non-HTTPS server: $INPUT_SERVER"
-              exit 1
-            fi
-            echo "::warning::Uploading over plaintext HTTP to $INPUT_SERVER"
-            ;;
-        esac
+        # The loopback exception matches the host exactly (optional port, then
+        # a path or the end): a prefix match would also let
+        # http://localhost.evil.example through.
+        LOOPBACK_RE='^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/.*)?$'
+        if [[ "$INPUT_SERVER" == https://* ]] || [[ "$INPUT_SERVER" =~ $LOOPBACK_RE ]]; then
+          :
+        else
+          if [ -n "$INPUT_API_KEY" ] || [ -n "$INPUT_GITHUB_TOKEN" ]; then
+            echo "::error::Refusing to send credentials to a non-HTTPS server: $INPUT_SERVER"
+            exit 1
+          fi
+          echo "::warning::Uploading over plaintext HTTP to $INPUT_SERVER"
+        fi
 
         # Build base query parameters
         BASE_PARAMS="project_id=$(printf '%s' "$INPUT_PROJECT_ID" | jq -sRr @uri)"
