@@ -1,3 +1,4 @@
+pub mod api_auth;
 pub mod auth;
 pub mod badge;
 pub mod coverage;
