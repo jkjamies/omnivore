@@ -52,7 +52,7 @@ class OmnivoreClassTransformer(
         // Skip classes from classloaders that can't see OmnivoreRuntime.
         // Without this, instrumented classes would throw NoClassDefFoundError
         // when their <clinit> tries to call OmnivoreRuntime.getProbes().
-        if (loader != null && !canSeeRuntime(loader)) {
+        if (!canSeeRuntime(loader)) {
             InstrumentationStats.skipped(InstrumentationStats.SkipReason.NO_RUNTIME_ACCESS)
             return null
         }
@@ -192,8 +192,14 @@ class OmnivoreClassTransformer(
      * Check if a classloader can see OmnivoreRuntime.
      * Only instrument classes from classloaders that can resolve the runtime,
      * otherwise the instrumented <clinit> will throw NoClassDefFoundError.
+     *
+     * A null loader is the bootstrap loader, which sees the runtime only if the
+     * runtime itself was loaded there. It used to be waved through, and other
+     * agents that put themselves on the boot class path (Kover's IntelliJ agent)
+     * then had their premain classes instrumented and aborted the JVM at startup.
      */
-    private fun canSeeRuntime(loader: ClassLoader): Boolean {
+    private fun canSeeRuntime(loader: ClassLoader?): Boolean {
+        if (loader == null) return OmnivoreRuntime::class.java.classLoader == null
         return try {
             loader.loadClass("com.jkjamies.omnivore.agent.runtime.OmnivoreRuntime")
             true
@@ -252,6 +258,8 @@ class OmnivoreClassTransformer(
             "com/google/", "io/netty/", "io/grpc/",
             "com/fasterxml/", "com/squareup/",
             "org/jetbrains/annotations/",
+            // Other coverage agents running alongside us
+            "com/intellij/rt/coverage/", "org/jacoco/",
             // Android / AndroidX / Compose
             "android/", "dalvik/",
             "androidx/",
