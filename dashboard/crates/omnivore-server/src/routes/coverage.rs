@@ -173,7 +173,10 @@ pub async fn ingest_coverage(
                 .and_then(|p| p.github_repo);
 
             match linked_repo {
-                Some(ref linked) if linked == repo => std::env::var("GITHUB_TOKEN").ok(),
+                // GitHub owner/repo names are case-insensitive.
+                Some(ref linked) if linked.eq_ignore_ascii_case(repo) => {
+                    std::env::var("GITHUB_TOKEN").ok()
+                }
                 _ => {
                     tracing::warn!(
                         %repo,
