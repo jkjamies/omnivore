@@ -163,13 +163,29 @@ on any repository the server's token can write to.
 
 ### Coverage Queries
 
+`latest` and `trend` report a single `(target, source)` **series**. A project
+often has several — unit and instrumented tests, or the same target measured by
+both the Omnivore agent and Kover — and mixing them produces a trend line that
+alternates between unrelated measurements. Select one with `?target=` and/or
+`?source=`:
+
+```sh
+curl "http://localhost:3000/api/v1/coverage/my-app/trend?target=JVM_UNIT&source=omnivore-agent"
+```
+
+With exactly one series the parameters are optional. When the filters match more
+than one, the endpoint returns `300 Multiple Choices` rather than picking
+arbitrarily; call `/series` to see the options. The badge behaves the same way
+and renders "unknown" instead of guessing.
+
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/projects` | List all projects |
 | `POST` | `/api/v1/projects` | Create a project |
 | `PATCH` | `/api/v1/projects/{project_id}` | Update project settings |
-| `GET` | `/api/v1/coverage/{project_id}/latest` | Latest coverage snapshot |
-| `GET` | `/api/v1/coverage/{project_id}/trend?limit=30` | Coverage trend data |
+| `GET` | `/api/v1/coverage/{project_id}/latest` | Latest snapshot for one series |
+| `GET` | `/api/v1/coverage/{project_id}/trend?limit=30` | Trend data for one series |
+| `GET` | `/api/v1/coverage/{project_id}/series` | List the `(target, source)` series a project has |
 | `GET` | `/api/v1/coverage/{project_id}/dependencies` | Dependency graph |
 | `GET` | `/api/v1/health` | Health check |
 
@@ -225,7 +241,15 @@ Shields.io-style SVG badge showing current coverage:
 https://your-dashboard.com/badge/{project_id}
 ```
 
-**Query params**: `?metric=line|branch` `?target=JvmUnit`
+**Query params**: `?metric=line|branch` `?target=JVM_UNIT` `?source=omnivore-agent`
+
+A project with more than one series (say, unit and instrumented tests, or the
+agent and Kover measuring the same target) must name one, or the badge reads
+"unknown":
+
+```markdown
+![Coverage](https://your-dashboard.com/badge/my-project?target=JVM_UNIT&source=omnivore-agent)
+```
 
 **Usage in Markdown**:
 ```markdown
@@ -251,10 +275,14 @@ https://your-dashboard.com/embed/{project_id}/trend
 |---|---|---|
 | `limit` | `30` | Number of data points |
 | `metric` | `line` | `line` or `branch` |
-| `target` | all | Filter by target (e.g., `JvmUnit`, `AndroidInstrumented`) |
+| `target` | — | Series target (e.g., `JVM_UNIT`, `ANDROID_INSTRUMENTED`) |
+| `source` | — | Series source (e.g., `omnivore-agent`, `kover`) |
 | `width` | `400` | Width in pixels |
 | `height` | `120` | Height in pixels |
 | `theme` | `light` | `light` or `dark` |
+
+The chart shows one series. If `target`/`source` match several, it shows the
+one uploaded to most recently; name both to pin it.
 
 **Usage in Markdown** (GitHub README, wiki):
 ```markdown
