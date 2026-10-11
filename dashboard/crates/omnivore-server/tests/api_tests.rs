@@ -839,7 +839,10 @@ async fn dependency_graph_json_cannot_close_script_tag() {
         !html.contains("</script><script>alert(1)"),
         "module name broke out of the script block"
     );
-    assert!(html.contains(r"</script"), "expected escaped '<' in embedded JSON");
+    assert!(
+        html.contains(r"\u003c/script\u003e\u003cscript\u003ealert(1)"),
+        "expected the module name with '<' and '>' escaped in embedded JSON"
+    );
 }
 
 /// File paths are interpolated into `onclick="toggleDir(this, '…')"`, so a
