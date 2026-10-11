@@ -1,0 +1,658 @@
+{
+  "version": "1.0",
+  "format": "omnivore",
+  "project": {
+    "id": "kmp-test-rig",
+    "name": "KMP Test Rig",
+    "commitSha": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+    "branch": "main",
+    "target": "JVM_UNIT"
+  },
+  "coverage": {
+    "lineRate": 0.6857,
+    "branchRate": 0.697,
+    "linesCovered": 96,
+    "linesTotal": 140,
+    "branchesCovered": 23,
+    "branchesTotal": 33
+  },
+  "files": [
+    {
+      "path": "com/example/core/Validation.kt",
+      "lineRate": 0.8333,
+      "branchRate": 0.8333,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 5,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 6,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 9,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 10,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 11,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 12,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 14,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 15,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 16,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 17,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 18,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 21,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 24,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 25,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 26,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 27,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 30,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 31,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 32,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 33,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 34,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 37,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 38,
+          "hitCount": 0
+        }
+      ]
+    },
+    {
+      "path": "com/example/core/model/User.kt",
+      "lineRate": 1.0,
+      "branchRate": 1.0,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 6,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 9,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 11,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 14,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 17,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 19,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 21,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 22,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 23,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 24,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 25,
+          "hitCount": 1
+        }
+      ]
+    },
+    {
+      "path": "com/example/core/usecase/AddUserUseCase.kt",
+      "lineRate": 0.7143,
+      "branchRate": 0.6667,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 4,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 7,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 10,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 11,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 12,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 14,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 16,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 18,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 21,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 24,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 25,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 26,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 28,
+          "hitCount": 0
+        }
+      ]
+    },
+    {
+      "path": "com/example/core/usecase/GetUsersUseCase.kt",
+      "lineRate": 1.0,
+      "branchRate": 1.0,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 4,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 5,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 8,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 9,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 10,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 12,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 13,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 14,
+          "hitCount": 1
+        }
+      ]
+    },
+    {
+      "path": "com/example/app/util/Calculator.kt",
+      "lineRate": 0.6111,
+      "branchRate": 0.5,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 4,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 7,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 9,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 12,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 14,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 17,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 18,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 19,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 20,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 21,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 22,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 23,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 24,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 25,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 28,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 29,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 31,
+          "hitCount": 0
+        }
+      ]
+    },
+    {
+      "path": "com/example/app/util/StringUtils.kt",
+      "lineRate": 0.75,
+      "branchRate": 0.75,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 6,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 7,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 10,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 13,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 14,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 15,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 16,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 17,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 20,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 21,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 22,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 24,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 25,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 26,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 27,
+          "hitCount": 0
+        }
+      ]
+    },
+    {
+      "path": "com/example/app/data/repository/InMemoryUserRepository.kt",
+      "lineRate": 0.5238,
+      "branchRate": 0.6,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 4,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 7,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 10,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 13,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 16,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 18,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 19,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 20,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 21,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 23,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 25,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 28,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 29,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 30,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 31,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 33,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 34,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 35,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 37,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 38,
+          "hitCount": 0
+        }
+      ]
+    },
+    {
+      "path": "com/example/app/presentation/UserListStore.kt",
+      "lineRate": 0.4231,
+      "branchRate": 0.5,
+      "lines": [
+        {
+          "lineNumber": 3,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 6,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 8,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 9,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 11,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 14,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 16,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 18,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 19,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 20,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 21,
+          "hitCount": 1
+        },
+        {
+          "lineNumber": 22,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 25,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 26,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 28,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 29,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 32,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 33,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 36,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 38,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 39,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 40,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 43,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 44,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 47,
+          "hitCount": 0
+        },
+        {
+          "lineNumber": 48,
+          "hitCount": 0
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "modules": [
+      {
+        "id": ":core",
+        "name": "core",
+        "type": "INTERNAL"
+      },
+      {
+        "id": ":app",
+        "name": "app",
+        "type": "INTERNAL"
+      }
+    ],
+    "edges": [
+      {
+        "from": ":app",
+        "to": ":core",
+        "configuration": "implementation"
+      }
+    ]
+  }
+}
