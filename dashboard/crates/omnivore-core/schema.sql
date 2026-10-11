@@ -10,7 +10,8 @@
 --      exist only after the server had been run once — a circular dependency
 --      that made `docker build` fail outright on a clean tree.
 --
--- Statements are separated by a semicolon at end of line. Column additions to
+-- Statements are separated by a semicolon at end of line (LF line endings —
+-- pinned in .gitattributes, since the splitter looks for ";\n"). Column additions to
 -- an existing deployment live in `run_migrations` as guarded ALTER TABLEs;
 -- new columns must be added in BOTH places.
 
