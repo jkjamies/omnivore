@@ -154,6 +154,11 @@ pub fn parse(
                 line_rate,
                 branch_rate,
                 lines,
+                // Already computed above from each line's cb/mb; it used to be
+                // collapsed into branch_rate and thrown away, which left the
+                // dashboard unable to weight directory rollups by branch count.
+                branches_covered: file_branches_covered,
+                branches_total: file_branches_total,
                 source_content: None,
             });
         }
