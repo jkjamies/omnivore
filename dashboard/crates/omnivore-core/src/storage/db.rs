@@ -70,7 +70,7 @@ impl Database {
         // split out by inspection rather than by convention so this cannot
         // regress when a new index is added to schema.sql.
         let (indexes, tables): (Vec<&str>, Vec<&str>) = Self::schema_statements()
-            .partition(|s| s.to_ascii_uppercase().starts_with("CREATE INDEX"));
+            .partition(|s| Self::is_create_index(s));
 
         // Phase 1: tables and seed rows. Creates everything on a fresh install;
         // no-ops on an existing one.
@@ -258,6 +258,18 @@ impl Database {
     /// Statements are separated by a semicolon at end of line; comment lines are
     /// stripped first, so a statement preceded by a comment block is not
     /// mistaken for a comment and skipped whole.
+    /// Whether a schema statement creates an index, in any of the forms SQLite
+    /// accepts (`CREATE INDEX`, `CREATE UNIQUE INDEX`) and however the words
+    /// are spaced or wrapped across lines.
+    fn is_create_index(statement: &str) -> bool {
+        let mut words = statement.split_whitespace().map(str::to_ascii_uppercase);
+        match (words.next().as_deref(), words.next().as_deref()) {
+            (Some("CREATE"), Some("INDEX")) => true,
+            (Some("CREATE"), Some("UNIQUE")) => words.next().as_deref() == Some("INDEX"),
+            _ => false,
+        }
+    }
+
     fn schema_statements() -> impl Iterator<Item = &'static str> {
         Self::SCHEMA_SQL.split(";\n").filter_map(|chunk| {
             let mut rest = chunk.trim_start();
@@ -1363,10 +1375,13 @@ impl Database {
 ///
 /// Defaults to the usual release lines; override with a comma-separated
 /// `OMNIVORE_RATCHET_BRANCHES`. A snapshot with no branch recorded still
-/// counts, since single-branch setups often omit it.
+/// counts, since single-branch setups often omit it — unless
+/// `OMNIVORE_RATCHET_REQUIRE_BRANCH=true`, for deployments where an upload
+/// that leaves the branch off could come from a feature branch.
 fn is_ratchet_branch(branch: Option<&str>) -> bool {
     let Some(branch) = branch.map(str::trim).filter(|b| !b.is_empty()) else {
-        return true;
+        return !std::env::var("OMNIVORE_RATCHET_REQUIRE_BRANCH")
+            .is_ok_and(|v| v.trim().eq_ignore_ascii_case("true"));
     };
     match std::env::var("OMNIVORE_RATCHET_BRANCHES") {
         Ok(list) if !list.trim().is_empty() => list
@@ -1394,4 +1409,20 @@ pub struct HealthStats {
     pub snapshot_count: i64,
     pub last_ingest: Option<String>,
     pub db_size_bytes: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Database;
+
+    #[test]
+    fn index_detection_covers_every_create_index_form() {
+        assert!(Database::is_create_index("CREATE INDEX IF NOT EXISTS i ON t(c)"));
+        assert!(Database::is_create_index("create unique index i ON t(c)"));
+        assert!(Database::is_create_index("CREATE\n    INDEX i ON t(c)"));
+        assert!(Database::is_create_index("CREATE  UNIQUE\tINDEX i ON t(c)"));
+        assert!(!Database::is_create_index("CREATE TABLE IF NOT EXISTS t (c TEXT)"));
+        assert!(!Database::is_create_index("CREATE UNIQUE"));
+        assert!(!Database::is_create_index("INSERT INTO t VALUES (1)"));
+    }
 }

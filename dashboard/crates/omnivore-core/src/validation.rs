@@ -43,14 +43,15 @@ fn is_valid_repo_name(name: &str) -> bool {
 
 /// Validate a repository-relative file path before it is appended to a URL.
 ///
-/// Rejects absolute paths, `..` traversal, empty segments, and control
-/// characters. Coverage reports supply these paths, so they are attacker
-/// controlled on an open dashboard.
+/// Rejects absolute paths, `..` traversal, empty segments, control
+/// characters, and `?`/`#`/`%`, which would end or re-encode the URL path and
+/// fetch a different file. Coverage reports supply these paths, so they are
+/// attacker controlled on an open dashboard.
 pub fn is_safe_repo_path(path: &str) -> bool {
     if path.is_empty() || path.len() > 1024 || path.starts_with('/') {
         return false;
     }
-    if path.chars().any(|c| c.is_control() || c == '\\') {
+    if path.chars().any(|c| c.is_control() || matches!(c, '\\' | '?' | '#' | '%')) {
         return false;
     }
     path.split('/')
@@ -98,6 +99,9 @@ mod tests {
         assert!(!is_safe_repo_path("/etc/passwd"));
         assert!(!is_safe_repo_path("app//foo"));
         assert!(!is_safe_repo_path(""));
+        assert!(!is_safe_repo_path("README.md?ref=attacker-branch"));
+        assert!(!is_safe_repo_path("src/a.kt#frag"));
+        assert!(!is_safe_repo_path("src/%2e%2e/secret"));
         assert!(!is_safe_repo_path("a\nb"));
     }
 }

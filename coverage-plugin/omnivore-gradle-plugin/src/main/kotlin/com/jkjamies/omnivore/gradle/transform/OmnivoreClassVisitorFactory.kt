@@ -89,12 +89,9 @@ abstract class OmnivoreClassVisitorFactory :
             }) return false
         }
 
-        // Check Compose patterns
-        val composeEnabled = parameters.get().composeFilterEnabled.getOrElse(true)
-        if (composeEnabled) {
-            val internalName = className.replace('.', '/')
-            if (ComposeDetector.isGeneratedClass(internalName)) return false
-        }
+        // Same Compose decision as the load-time agent, including the default
+        // exclude patterns (ComposableSingletons, $lambda-, LiveLiterals).
+        if (ComposeDetector.isExcludedClass(className.replace('.', '/'), agentConfig())) return false
 
         return true
     }
@@ -107,20 +104,21 @@ abstract class OmnivoreClassVisitorFactory :
         nextClassVisitor: ClassVisitor,
     ): ClassVisitor {
         val className = classContext.currentClassData.className.replace('.', '/')
-        val config = AgentConfig(
-            composeFilterEnabled = parameters.get().composeFilterEnabled.getOrElse(true),
-            includes = parameters.get().includes.getOrElse(emptyList()),
-            excludes = parameters.get().excludes.getOrElse(emptyList()),
-            excludeAnnotations = parameters.get().excludeAnnotations.getOrElse(emptyList()),
-        )
 
         return BuildTimeInstrumentingVisitor(
             className = className,
-            config = config,
+            config = agentConfig(),
             probeMap = buildTimeProbeMap,
             delegate = nextClassVisitor,
         )
     }
+
+    private fun agentConfig() = AgentConfig(
+        composeFilterEnabled = parameters.get().composeFilterEnabled.getOrElse(true),
+        includes = parameters.get().includes.getOrElse(emptyList()),
+        excludes = parameters.get().excludes.getOrElse(emptyList()),
+        excludeAnnotations = parameters.get().excludeAnnotations.getOrElse(emptyList()),
+    )
 
     private fun isInfrastructureClass(className: String): Boolean {
         val skipPrefixes = arrayOf(
