@@ -74,9 +74,12 @@ object CoverageAnalyzer {
                         // condition at the bottom of the body), so create the
                         // line entry if it isn't there yet rather than dropping
                         // the branch on the floor as the old code did.
+                        // A taken edge also proves its line executed, even
+                        // when the line probe hasn't been seen (yet).
                         val existing = lines[probeEntry.lineNumber]
                             ?: LineInfo(hitCount = 0L, branchCount = 0, branchesCovered = 0)
                         lines[probeEntry.lineNumber] = existing.copy(
+                            hitCount = if (isHit && existing.hitCount == 0L) 1L else existing.hitCount,
                             branchCount = existing.branchCount + 1,
                             branchesCovered = existing.branchesCovered + if (isHit) 1 else 0,
                         )

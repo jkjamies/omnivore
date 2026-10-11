@@ -30,6 +30,9 @@ on:
       - 'test-rigs/android-test-rig/**'
       - '.github/workflows/android.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build-time-transform:
     runs-on: ubuntu-latest
