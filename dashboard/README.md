@@ -37,6 +37,7 @@ All configuration is via environment variables:
 | `OMNIVORE_CORS_ORIGINS` | *(same-origin)* | Comma-separated allowed origins, or `*` for any |
 | `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum accepted ingest body (32 MiB) |
 | `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a project's ratchet floor |
+| `OMNIVORE_RATCHET_REQUIRE_BRANCH` | `false` | When `true`, uploads with no branch never raise a project's ratchet floor |
 | `OMNIVORE_STATIC_DIR` | *(compile-time)* | Path to static assets directory (set in Docker) |
 
 ## Security model
