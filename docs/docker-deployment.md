@@ -41,6 +41,10 @@ All configuration is via environment variables:
 | `OMNIVORE_MAX_UPLOAD_BYTES` | `33554432` | Maximum ingest body size (32 MiB) |
 | `OMNIVORE_RATCHET_BRANCHES` | `main,master` | Branches whose snapshots may raise a ratchet floor |
 | `OMNIVORE_RATCHET_REQUIRE_BRANCH` | `false` | When `true`, uploads with no branch never raise a ratchet floor |
+| `OMNIVORE_SECRET_KEY` | *(none)* | Encrypts stored GitHub session tokens (any passphrase; hashed to a key). Without it they are stored in plaintext |
+| `OMNIVORE_REQUIRE_LOGIN_TO_VIEW` | `false` | Require a login to browse coverage, not just to change it |
+| `OMNIVORE_ALLOW_PROJECT_AUTOCREATE` | `true` | Let ingest create a project it has not seen before |
+| `OMNIVORE_INGEST_RATE_LIMIT` | `60` | Ingest requests per minute per client (`0` disables) |
 
 ### Before exposing this beyond localhost
 
@@ -52,8 +56,16 @@ minimum:
 -e OMNIVORE_REQUIRE_API_KEY=true \
 -e GITHUB_CLIENT_ID=... -e GITHUB_CLIENT_SECRET=... \
 -e OMNIVORE_ADMIN_USERS=yourname \
+-e OMNIVORE_SECRET_KEY=... \
 -e OMNIVORE_DASHBOARD_URL=https://omnivore.example.com
 ```
+
+Generate `OMNIVORE_SECRET_KEY` once (e.g. `openssl rand -base64 32`) and keep it
+somewhere durable — not inline in the run command, which would make a new one
+each time. It encrypts the GitHub tokens
+stored for logged-in users, so without it `omnivore.db` holds them in plaintext.
+Enabling it later is safe (existing sessions keep working, new ones are
+encrypted), but changing or losing it logs everyone out.
 
 Note that coverage numbers and file paths stay world-readable even with OAuth
 on — only mutations are gated. Put an authenticating reverse proxy in front if

@@ -25,9 +25,16 @@ const OAUTH_STATE_COOKIE: &str = "omnivore_oauth_state";
 const DEFAULT_OAUTH_SCOPES: &str = "read:user,read:org";
 
 fn oauth_scopes() -> String {
+    // Normalise "read:user, repo" or "read:user repo" to "read:user,repo" so a
+    // stray space doesn't become part of a scope name.
     std::env::var("OMNIVORE_GITHUB_SCOPES")
         .ok()
-        .map(|s| s.trim().to_string())
+        .map(|s| {
+            s.split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|scope| !scope.is_empty())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| DEFAULT_OAUTH_SCOPES.to_string())
 }
@@ -38,7 +45,7 @@ fn oauth_scopes() -> String {
 /// a `Secure` cookie is simply never sent over plain HTTP, which would break
 /// login for someone running this on `http://localhost:3000`. Override with
 /// `OMNIVORE_COOKIE_SECURE=true|false`.
-fn cookie_secure() -> bool {
+pub(crate) fn cookie_secure() -> bool {
     match std::env::var("OMNIVORE_COOKIE_SECURE") {
         Ok(v) if !v.trim().is_empty() => matches!(
             v.trim().to_ascii_lowercase().as_str(),
@@ -373,6 +380,56 @@ pub async fn is_dashboard_admin(db: &Database, user: &AuthUser) -> bool {
 // -- Auth middleware --
 // When OAuth is not configured, all requests pass through (open access).
 // When OAuth IS configured, these enforce login and permission checks.
+
+/// Middleware: require login to *view* anything, when the operator asks for it.
+///
+/// Coverage numbers, file paths, and hotspots are world-readable by default —
+/// only mutations are gated. That is a reasonable default for an internal tool,
+/// but file paths alone reveal a good deal about a private codebase, so
+/// `OMNIVORE_REQUIRE_LOGIN_TO_VIEW=true` extends the login requirement over the
+/// read-only pages and API too.
+///
+/// Health and auth endpoints stay open regardless: they are how a load balancer
+/// checks liveness and how a user gets logged in.
+pub async fn require_login_to_view_middleware(
+    State(db): State<Database>,
+    jar: CookieJar,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !require_login_to_view() || OAuthConfig::from_env().is_none() {
+        return next.run(request).await;
+    }
+    if extract_user(&db, &jar).await.is_some() {
+        return next.run(request).await;
+    }
+
+    // An API client gets a status code it can act on; a browser gets sent to
+    // the login page.
+    let wants_html = request
+        .headers()
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"));
+
+    if wants_html {
+        Redirect::to("/auth/login").into_response()
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
+/// Is view access gated behind login?
+pub fn require_login_to_view() -> bool {
+    matches!(
+        std::env::var("OMNIVORE_REQUIRE_LOGIN_TO_VIEW")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
 
 /// Middleware: require login when OAuth is enabled. Redirects to /auth/login if not authenticated.
 pub async fn require_login_middleware(

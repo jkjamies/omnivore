@@ -128,8 +128,9 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=jacoco&project
 - Version: `0.1.0-SNAPSHOT` (plugin), `0.1.0` (dashboard)
 - Gradle plugin ID: `io.github.jkjamies.omnivore`
 - Group ID: `io.github.jkjamies`
-- Report format: `omnivore-report.json` — camelCase fields, kotlinx-serialization (Kotlin) ↔ serde (Rust)
+- Report format: `omnivore-report.json` — camelCase fields, kotlinx-serialization (Kotlin) ↔ serde (Rust). The two definitions must stay in sync; see `schema/CLAUDE.md`.
 - Coverage targets: `JVM_UNIT`, `ANDROID_INSTRUMENTED`, `IOS_UNIT`, `KOTLIN_NATIVE`, `COMPOSITE`, `RUST_LLVM_COV`, `GO_COVER`, `PYTHON_COVERAGE`, `LCOV`
+- **Target vs. source:** `target` is *where* code ran, `source` is *which tool* measured it (`omnivore-agent`, `kover`, `jacoco`, …). The `(target, source)` pair is the "series" the dashboard trends, prunes, and reports on — never treat "the project's latest snapshot" as meaningful when several series exist.
 
 ## CI/CD
 
@@ -141,3 +142,19 @@ curl -X POST "http://localhost:3000/api/v1/ingest/coverage?format=jacoco&project
 - See `coverage-plugin/PUBLISHING-REQUIRED.md` for one-time setup checklist
 
 `dashboard.yml` runs `cargo fmt`/`clippy` as advisory (`continue-on-error`) because the tree predates any such gate; `cargo test` and the Docker build gate. Run `cargo fmt --all` once, then make both hard failures.
+
+## Reviewing this codebase
+
+`docs/CODEBASE-REVIEW.md` is the standing record of known defects, why they
+mattered, and what was done about them. Read it before changing coverage
+computation, authorization, or the probe format — several non-obvious
+invariants are documented there and nowhere else.
+
+Two invariants worth knowing before touching anything:
+
+- **Probe indices are positional.** `ClassInstrumenter.walkProbes` must emit
+  probes in exactly the order `ProbeInserter` inserts them, or coverage lands
+  on the wrong source lines with no error anywhere.
+- **Both access controls default to open.** GitHub OAuth gates reading, API
+  keys gate writing, and they are independent. The server logs its effective
+  posture at startup.

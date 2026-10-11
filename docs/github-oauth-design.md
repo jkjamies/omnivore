@@ -59,11 +59,13 @@ sessions (
   plain HTTP, breaking login for `http://localhost:3000`.
 - Expired sessions pruned on each login or periodically
 
-> `github_token` is stored **in plaintext**, so `omnivore.db` is a credential
-> store: read access to the file (a backup, a stray volume mount) yields working
-> GitHub tokens for every logged-in user. This is the main reason the default
-> scope set excludes `repo`. Encrypting the column is tracked in
-> `docs/CODEBASE-REVIEW.md` §2.9.
+> `github_token` is encrypted (ChaCha20-Poly1305) when `OMNIVORE_SECRET_KEY` is
+> set. **Without it the token is stored in plaintext**, so `omnivore.db` is a
+> credential store: read access to the file (a backup, a stray volume mount)
+> yields working GitHub tokens for every logged-in user. That is the main reason
+> the default scope set excludes `repo`, and why any deployment with OAuth on
+> should set the key. Plaintext and encrypted rows coexist, so enabling it on an
+> existing instance logs nobody out.
 
 ## Project-Level Permissions
 

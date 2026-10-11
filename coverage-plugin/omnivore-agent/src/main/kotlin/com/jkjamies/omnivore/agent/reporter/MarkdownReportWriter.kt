@@ -1,6 +1,7 @@
 package com.jkjamies.omnivore.agent.reporter
 
 import java.io.File
+import java.util.Locale
 
 /**
  * Writes a Markdown coverage report suitable for PR comments, CI logs, or READMEs.
@@ -14,8 +15,8 @@ object MarkdownReportWriter {
 
     fun generate(analysisResult: CoverageAnalyzer.AnalysisResult): String {
         val summary = analysisResult.summary
-        val linePercent = "%.1f".format(summary.lineRate * 100)
-        val branchPercent = "%.1f".format(summary.branchRate * 100)
+        val linePercent = pct(summary.lineRate * 100)
+        val branchPercent = pct(summary.branchRate * 100)
 
         return buildString {
             appendLine("## Omnivore Coverage Report")
@@ -34,8 +35,8 @@ object MarkdownReportWriter {
                 appendLine("|------|---------|-------|------------|")
 
                 for (file in analysisResult.files) {
-                    val fileLinePercent = "%.1f".format(file.lineRate * 100)
-                    val fileBranchPercent = "%.1f".format(file.branchRate * 100)
+                    val fileLinePercent = pct(file.lineRate * 100)
+                    val fileBranchPercent = pct(file.branchRate * 100)
                     val covered = file.lines.count { it.hitCount > 0 }
                     val total = file.lines.size
                     appendLine("| `${file.path}` | ${badge(file.lineRate)} ${fileLinePercent}% | ${covered}/${total} | ${fileBranchPercent}% |")
@@ -53,4 +54,7 @@ object MarkdownReportWriter {
         rate >= 0.5 -> "\uD83D\uDFE1" // yellow circle
         else -> "\uD83D\uDD34"         // red circle
     }
+
+    /** Locale-independent percentage — see the note in [HtmlReportWriter.pct]. */
+    private fun pct(value: Double): String = String.format(Locale.ROOT, "%.1f", value)
 }

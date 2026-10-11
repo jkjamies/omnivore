@@ -1,13 +1,23 @@
+use crate::routes::csrf;
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::{Html, Redirect};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Form;
+use axum_extra::extract::cookie::CookieJar;
 use omnivore_core::model::api_key::{ApiKey, ApiKeyCreated};
 use omnivore_core::model::project::Project;
 use omnivore_core::model::settings::GlobalSettings;
 use omnivore_core::storage::Database;
 use serde::Deserialize;
+
+/// Body for form posts that carry nothing but the anti-CSRF token
+/// (delete buttons).
+#[derive(Deserialize)]
+pub struct CsrfOnlyForm {
+    #[serde(default)]
+    csrf_token: Option<String>,
+}
 
 // -- Global settings page --
 
@@ -16,6 +26,8 @@ use serde::Deserialize;
 struct SettingsPage {
     settings: GlobalSettings,
     api_keys: Vec<ApiKey>,
+    /// Anti-CSRF token echoed into every form on the page.
+    csrf_token: String,
 }
 
 impl SettingsPage {
@@ -49,7 +61,9 @@ impl SettingsPage {
 
 pub async fn settings_page(
     State(db): State<Database>,
-) -> Result<Html<String>, StatusCode> {
+    jar: CookieJar,
+) -> Result<(CookieJar, Html<String>), StatusCode> {
+    let (jar, csrf_token) = csrf::issue(jar);
     let settings = db
         .get_global_settings()
         .await
@@ -60,13 +74,16 @@ pub async fn settings_page(
         .await
         .unwrap_or_default();
 
-    let page = SettingsPage { settings, api_keys };
+    let page = SettingsPage { settings, api_keys, csrf_token };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Html(html))
+    Ok((jar, Html(html)))
 }
 
 #[derive(Deserialize)]
 pub struct SaveSettingsForm {
+    /// Anti-CSRF token; see routes::csrf.
+    #[serde(default)]
+    csrf_token: Option<String>,
     default_line_threshold: Option<String>,
     default_branch_threshold: Option<String>,
     default_line_warn_threshold: Option<String>,
@@ -77,8 +94,10 @@ pub struct SaveSettingsForm {
 
 pub async fn save_settings(
     State(db): State<Database>,
+    jar: CookieJar,
     Form(form): Form<SaveSettingsForm>,
-) -> Result<Redirect, StatusCode> {
+) -> Result<Redirect, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     let line = form
         .default_line_threshold
         .as_deref()
@@ -138,7 +157,7 @@ pub async fn save_settings(
 
     db.update_global_settings(&settings)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     Ok(Redirect::to("/settings"))
 }
@@ -151,6 +170,8 @@ struct ProjectSettingsPage {
     project: Project,
     global_settings: GlobalSettings,
     api_keys: Vec<ApiKey>,
+    /// Anti-CSRF token echoed into every form on the page.
+    csrf_token: String,
 }
 
 impl ProjectSettingsPage {
@@ -212,7 +233,9 @@ impl ProjectSettingsPage {
 pub async fn project_settings_page(
     State(db): State<Database>,
     Path(project_id): Path<String>,
-) -> Result<Html<String>, StatusCode> {
+    jar: CookieJar,
+) -> Result<(CookieJar, Html<String>), StatusCode> {
+    let (jar, csrf_token) = csrf::issue(jar);
     let project = db
         .get_project(&project_id)
         .await
@@ -226,15 +249,18 @@ pub async fn project_settings_page(
         .await
         .unwrap_or_default();
 
-    let page = ProjectSettingsPage { project, global_settings, api_keys };
+    let page = ProjectSettingsPage { project, global_settings, api_keys, csrf_token };
     let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Html(html))
+    Ok((jar, Html(html)))
 }
 
 // -- Project threshold update --
 
 #[derive(Deserialize)]
 pub struct ProjectThresholdForm {
+    /// Anti-CSRF token; see routes::csrf.
+    #[serde(default)]
+    csrf_token: Option<String>,
     line_threshold: Option<String>,
     branch_threshold: Option<String>,
     line_warn_threshold: Option<String>,
@@ -244,8 +270,10 @@ pub struct ProjectThresholdForm {
 pub async fn save_project_thresholds(
     State(db): State<Database>,
     Path(project_id): Path<String>,
+    jar: CookieJar,
     Form(form): Form<ProjectThresholdForm>,
-) -> Result<Redirect, StatusCode> {
+) -> Result<Redirect, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     // Empty string = inherit global default (NULL in DB)
     let line = form
         .line_threshold
@@ -277,7 +305,7 @@ pub async fn save_project_thresholds(
 
     db.update_project_thresholds(&project_id, line, branch, line_warn, branch_warn)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
 }
@@ -286,14 +314,19 @@ pub async fn save_project_thresholds(
 
 #[derive(Deserialize)]
 pub struct ProjectTagsForm {
+    /// Anti-CSRF token; see routes::csrf.
+    #[serde(default)]
+    csrf_token: Option<String>,
     tags: Option<String>,
 }
 
 pub async fn save_project_tags(
     State(db): State<Database>,
     Path(project_id): Path<String>,
+    jar: CookieJar,
     Form(form): Form<ProjectTagsForm>,
-) -> Result<Redirect, StatusCode> {
+) -> Result<Redirect, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     let tags = form.tags.as_deref().filter(|s| !s.trim().is_empty());
     // Normalize: trim each tag, remove empties
     let normalized = tags.map(|s| {
@@ -306,7 +339,7 @@ pub async fn save_project_tags(
 
     db.update_project_tags(&project_id, normalized.as_deref())
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
 }
@@ -315,6 +348,9 @@ pub async fn save_project_tags(
 
 #[derive(Deserialize)]
 pub struct ProjectRatchetForm {
+    /// Anti-CSRF token; see routes::csrf.
+    #[serde(default)]
+    csrf_token: Option<String>,
     ratchet_enabled: Option<String>,
     ratchet_line_floor: Option<String>,
     ratchet_branch_floor: Option<String>,
@@ -323,8 +359,10 @@ pub struct ProjectRatchetForm {
 pub async fn save_project_ratchet(
     State(db): State<Database>,
     Path(project_id): Path<String>,
+    jar: CookieJar,
     Form(form): Form<ProjectRatchetForm>,
-) -> Result<Redirect, StatusCode> {
+) -> Result<Redirect, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     let enabled = form.ratchet_enabled.as_deref() == Some("on");
 
     let line_floor = form.ratchet_line_floor
@@ -341,7 +379,7 @@ pub async fn save_project_ratchet(
 
     db.update_project_ratchet(&project_id, enabled, line_floor, branch_floor)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
 }
@@ -351,10 +389,13 @@ pub async fn save_project_ratchet(
 pub async fn delete_project(
     State(db): State<Database>,
     Path(project_id): Path<String>,
-) -> Result<Redirect, StatusCode> {
+    jar: CookieJar,
+    Form(form): Form<CsrfOnlyForm>,
+) -> Result<Redirect, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     db.delete_project(&project_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     Ok(Redirect::to("/"))
 }
@@ -363,6 +404,9 @@ pub async fn delete_project(
 
 #[derive(Deserialize)]
 pub struct CreateApiKeyForm {
+    /// Anti-CSRF token; see routes::csrf.
+    #[serde(default)]
+    csrf_token: Option<String>,
     name: String,
 }
 
@@ -375,20 +419,22 @@ struct ApiKeyCreatedPage {
 /// Create a global API key (not scoped to a project).
 pub async fn create_global_api_key(
     State(db): State<Database>,
+    jar: CookieJar,
     Form(form): Form<CreateApiKeyForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Result<Html<String>, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     let name = form.name.trim();
     if name.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into_response());
     }
 
     let key = db
         .create_api_key(name, None)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     let page = ApiKeyCreatedPage { key };
-    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
     Ok(Html(html))
 }
 
@@ -396,10 +442,13 @@ pub async fn create_global_api_key(
 pub async fn delete_global_api_key(
     State(db): State<Database>,
     Path(key_id): Path<String>,
-) -> Result<Redirect, StatusCode> {
+    jar: CookieJar,
+    Form(form): Form<CsrfOnlyForm>,
+) -> Result<Redirect, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     db.delete_api_key(&key_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     Ok(Redirect::to("/settings"))
 }
@@ -408,20 +457,22 @@ pub async fn delete_global_api_key(
 pub async fn create_project_api_key(
     State(db): State<Database>,
     Path(project_id): Path<String>,
+    jar: CookieJar,
     Form(form): Form<CreateApiKeyForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> Result<Html<String>, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     let name = form.name.trim();
     if name.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into_response());
     }
 
     let key = db
         .create_api_key(name, Some(&project_id))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     let page = ApiKeyCreatedPage { key };
-    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let html = page.render().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
     Ok(Html(html))
 }
 
@@ -429,10 +480,13 @@ pub async fn create_project_api_key(
 pub async fn delete_project_api_key(
     State(db): State<Database>,
     Path((project_id, key_id)): Path<(String, String)>,
-) -> Result<Redirect, StatusCode> {
+    jar: CookieJar,
+    Form(form): Form<CsrfOnlyForm>,
+) -> Result<Redirect, Response> {
+    csrf::verify(&jar, form.csrf_token.as_deref()).map_err(IntoResponse::into_response)?;
     db.delete_api_key(&key_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
 
     Ok(Redirect::to(&format!("/projects/{}/settings", project_id)))
 }
