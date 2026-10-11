@@ -295,7 +295,13 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
             .values()
             .map(|l| l.values().filter(|hit| **hit).count() as i64)
             .sum();
-        (covered, total, union.len() as i64)
+        // A target whose file data was pruned by retention has nothing to
+        // union; add its summary totals rather than dropping it entirely.
+        let pruned = targets.iter().filter(|t| t.files.is_empty());
+        let (p_covered, p_total, p_files) = pruned.fold((0, 0, 0), |acc, t| {
+            (acc.0 + t.lines_covered, acc.1 + t.lines_total, acc.2 + t.file_count)
+        });
+        (covered + p_covered, total + p_total, union.len() as i64 + p_files)
     } else {
         // Summary-only snapshots (file data pruned by retention) have no lines
         // to union, so fall back to summing. Over-counting a pruned historical
@@ -347,7 +353,7 @@ pub fn compute_composite(targets: &[TargetSnapshot]) -> Option<CompositeSnapshot
     Some(CompositeSnapshot {
         line_rate, branch_rate, lines_covered, lines_total,
         branches_covered, branches_total, file_count, line_delta, branch_delta,
-        lines_are_union: have_file_data,
+        lines_are_union: have_file_data && targets.iter().all(|t| !t.files.is_empty()),
         branches_are_union: false,
     })
 }
@@ -623,6 +629,23 @@ mod tests {
         assert_eq!(composite.lines_total, 30);
         assert_eq!(composite.lines_covered, 15);
         assert!(!composite.lines_are_union, "should be flagged as a sum, not a union");
+    }
+
+    /// One target with file data and one pruned to a summary: the pruned
+    /// target's totals still count, and the result is not a pure union.
+    #[test]
+    fn composite_keeps_pruned_targets_alongside_file_data() {
+        let unit = target("JVM_UNIT", vec![file("pkg/A.kt", 0, 0, &[(1, 1), (2, 0)])]);
+        let mut pruned = target("ANDROID_INSTRUMENTED", vec![]);
+        pruned.lines_total = 10;
+        pruned.lines_covered = 4;
+        pruned.file_count = 3;
+
+        let composite = compute_composite(&[unit, pruned]).unwrap();
+        assert_eq!(composite.lines_total, 12);
+        assert_eq!(composite.lines_covered, 5);
+        assert_eq!(composite.file_count, 4);
+        assert!(!composite.lines_are_union, "partly summed, so not a pure union");
     }
 
     #[test]
