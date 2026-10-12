@@ -174,7 +174,7 @@ Options:
 - Gradle 8.0+
 - JDK 17+
 - Kotlin 2.0+ (for Compose filtering)
-- AGP 8.0+, including 9.x (for Android instrumented tests)
+- AGP 8.8.2+, including 9.x (for Android instrumented tests)
 
 ## License
 

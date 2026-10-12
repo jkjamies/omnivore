@@ -13,11 +13,12 @@ updates:
     schedule:
       interval: "weekly"
     ignore:
-      # AGP is compileOnly and pinned to the oldest supported major on purpose:
-      # compiling against a newer one lets APIs slip in that crash on older AGP
-      # at runtime. Newer AGP is exercised by the Android test rig instead.
+      # AGP is compileOnly and pinned to the oldest supported release (8.8.x)
+      # on purpose: compiling against a newer one lets APIs slip in that crash
+      # on older AGP at runtime. Newer AGP is exercised by the Android test rig
+      # instead. 8.8.x patch updates are still proposed.
       - dependency-name: "com.android.tools.build:gradle"
-        update-types: ["version-update:semver-major"]
+        versions: [">= 8.9"]
 
   # Dashboard (Cargo/Rust)
   - package-ecosystem: "cargo"

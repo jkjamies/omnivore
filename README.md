@@ -152,7 +152,7 @@ omnivore {
 Instrumented test coverage requires:
 
 -   An Android emulator or device connected via ADB
--   AGP 8.x or 9.x for build-time bytecode transformation
+-   AGP 8.8.2+ (including 9.x) for build-time bytecode transformation
 -   `OmnivoreTestListener` is automatically added to the test runner
 
 #### Compose Filtering
