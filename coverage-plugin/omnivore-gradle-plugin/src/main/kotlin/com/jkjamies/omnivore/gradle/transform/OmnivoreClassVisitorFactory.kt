@@ -8,7 +8,6 @@ import com.jkjamies.omnivore.agent.AgentConfig
 import com.jkjamies.omnivore.agent.instrumentation.BuildTimeInstrumentingVisitor
 import com.jkjamies.omnivore.agent.instrumentation.ComposeDetector
 import com.jkjamies.omnivore.agent.instrumentation.GlobPattern
-import com.jkjamies.omnivore.agent.runtime.ProbeMap
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
@@ -48,14 +47,6 @@ interface OmnivoreTransformParams : InstrumentationParameters {
  */
 abstract class OmnivoreClassVisitorFactory :
     AsmClassVisitorFactory<OmnivoreTransformParams> {
-
-    companion object {
-        /**
-         * Thread-safe accumulator for probe map data collected during build-time transformation.
-         * A Gradle task reads this after the transform completes to write the .probes file.
-         */
-        val buildTimeProbeMap = ProbeMap()
-    }
 
     /**
      * Determine if a class should be instrumented.
@@ -108,7 +99,9 @@ abstract class OmnivoreClassVisitorFactory :
         return BuildTimeInstrumentingVisitor(
             className = className,
             config = agentConfig(),
-            probeMap = buildTimeProbeMap,
+            // No shared map: each class embeds its own, and the build reads them
+            // back from the transform's outputs (OmnivoreBuildProbeMapTask).
+            probeMap = null,
             delegate = nextClassVisitor,
         )
     }
