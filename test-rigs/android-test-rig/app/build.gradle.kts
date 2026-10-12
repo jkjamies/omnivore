@@ -60,8 +60,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
-    testImplementation("io.kotest:kotest-runner-junit5:6.1.7")
-    testImplementation("io.kotest:kotest-assertions-core:6.1.7")
+    testImplementation("io.kotest:kotest-runner-junit5:6.2.5")
+    testImplementation("io.kotest:kotest-assertions-core:6.2.5")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
