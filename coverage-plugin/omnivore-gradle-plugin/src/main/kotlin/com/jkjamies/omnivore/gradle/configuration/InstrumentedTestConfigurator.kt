@@ -1,9 +1,9 @@
 package com.jkjamies.omnivore.gradle.configuration
 
-import com.jkjamies.omnivore.agent.runtime.ProbeMapWriter
 import com.jkjamies.omnivore.gradle.OmnivoreExtension
-import com.jkjamies.omnivore.gradle.transform.OmnivoreClassVisitorFactory
+import com.jkjamies.omnivore.gradle.tasks.OmnivoreBuildProbeMapTask
 import org.gradle.api.Project
+import org.gradle.api.attributes.Attribute
 import java.io.File
 import java.util.Properties
 import java.util.concurrent.TimeUnit
@@ -41,6 +41,11 @@ object InstrumentedTestConfigurator {
 
     /** Upper bound on any single adb invocation. Pulling coverage is seconds of work. */
     private const val ADB_TIMEOUT_SECONDS = 120L
+
+    private val ARTIFACT_TYPE = Attribute.of("artifactType", String::class.java)
+
+    /** AGP's attribute selecting ASM-instrumented classes for a variant. */
+    private val ASM_TRANSFORMED_VARIANT = Attribute.of("asm-transformed-variant", String::class.java)
 
     /** Resource path for the version properties generated at plugin build time. */
     private const val VERSION_PROPS_RESOURCE = "omnivore-version.properties"
@@ -172,43 +177,75 @@ object InstrumentedTestConfigurator {
     }
 
     /**
-     * Registers a task that writes the build-time probe map accumulated during the
-     * AGP bytecode transform. This probe map is needed for the report task to
-     * correlate instrumented test probe data to source lines.
-     *
-     * The task runs after the ASM transform and before the report task.
+     * Registers `omnivoreWriteBuildProbeMap`, which writes the build-time probe
+     * map for every variant that has instrumented tests. The per-variant work is
+     * done by [OmnivoreBuildProbeMapTask]s registered in [registerVariantProbeMapTask].
      */
     private fun registerProbeMapTask(project: Project) {
-        val probeMapTask = project.tasks.register("omnivoreWriteBuildProbeMap") { task ->
+        project.tasks.register("omnivoreWriteBuildProbeMap") { task ->
             task.group = "omnivore"
-            task.description = "Write probe map from build-time bytecode transformation"
-
+            task.description = "Write probe maps from build-time bytecode transformation"
+            task.dependsOn(project.tasks.withType(OmnivoreBuildProbeMapTask::class.java))
+            // Earlier versions wrote a single build-time.probes accumulated in
+            // the Gradle daemon; one left over would conflict with the new maps.
             task.doLast {
-                val probeMap = OmnivoreClassVisitorFactory.buildTimeProbeMap
-                if (probeMap.getAllClassMaps().isEmpty()) {
-                    project.logger.info("Omnivore: No probe map data from build-time transform")
-                    return@doLast
-                }
-
-                val outputDir = project.rootProject.layout.buildDirectory
-                    .dir("omnivore/connectedAndroidTest")
-                    .get().asFile
-                outputDir.mkdirs()
-
-                val probeFile = File(outputDir, "build-time.probes")
-                ProbeMapWriter.write(probeFile, probeMap)
-                project.logger.info(
-                    "Omnivore: Wrote build-time probe map (${probeMap.getAllClassMaps().size} classes) to ${probeFile.absolutePath}"
-                )
+                project.rootProject.layout.buildDirectory
+                    .file("omnivore/connectedAndroidTest/build-time.probes")
+                    .get().asFile.delete()
             }
         }
+    }
 
-        // Wire dependency: probe map task runs after ASM transform tasks
-        project.tasks.matching {
-            it.name.contains("transformDebugClassesWithAsm") ||
-                it.name.contains("transformReleaseClassesWithAsm")
-        }.all { asmTask ->
-            probeMapTask.configure { it.dependsOn(asmTask) }
+    /**
+     * Registers the probe map task for one AGP variant, if it has instrumented
+     * tests. Called from the variant callback, where the variant is known.
+     *
+     * Its inputs are what AGP's ASM transform produced for the variant: the
+     * module's own classes (`transform<Variant>ClassesWithAsm`), and the runtime
+     * dependencies, which AGP transforms with an artifact transform selected by
+     * the `asm-transformed-variant` attribute — the same request AGP itself makes
+     * when dexing them.
+     */
+    fun registerVariantProbeMapTask(project: Project, variant: Any) {
+        val variantName = variant.javaClass.getMethod("getName").invoke(variant) as String
+        val androidTest = variant.javaClass.methods
+            .firstOrNull { it.name == "getAndroidTest" && it.parameterCount == 0 }
+            ?.invoke(variant)
+        if (androidTest == null) return
+
+        val capitalized = variantName.replaceFirstChar { it.uppercase() }
+        val transformTaskName = "transform${capitalized}ClassesWithAsm"
+        val runtimeClasspath = "${variantName}RuntimeClasspath"
+
+        project.tasks.register(
+            "omnivoreWrite${capitalized}BuildProbeMap",
+            OmnivoreBuildProbeMapTask::class.java,
+        ) { task ->
+            task.group = "omnivore"
+            task.description = "Write the build-time probe map for the $variantName variant"
+            task.instrumentedClasses.from(
+                project.provider {
+                    project.tasks.findByName(transformTaskName)?.outputs?.files ?: project.files()
+                }
+            )
+            task.instrumentedClasses.from(
+                project.provider {
+                    val configuration = project.configurations.findByName(runtimeClasspath)
+                        ?: return@provider project.files()
+                    configuration.incoming.artifactView { view ->
+                        view.attributes { attrs ->
+                            attrs.attribute(ARTIFACT_TYPE, "android-asm-instrumented-jars")
+                            attrs.attribute(ASM_TRANSFORMED_VARIANT, variantName)
+                        }
+                    }.files
+                }
+            )
+            task.probeMapFile.set(
+                project.rootProject.layout.buildDirectory.file(
+                    "omnivore/connectedAndroidTest/" +
+                        OmnivoreBuildProbeMapTask.fileName(project.path, variantName)
+                )
+            )
         }
     }
 

@@ -21,6 +21,11 @@ class ProbeMap {
 
     fun getClassMap(classId: Long): ClassProbeMap? = entries[classId]
 
+    /** Replaces any existing map for the same class. */
+    fun putClassMap(classMap: ClassProbeMap) {
+        entries[classMap.classId] = classMap
+    }
+
     fun getAllClassMaps(): Collection<ClassProbeMap> = entries.values.toList()
 
     fun removeClassMap(classId: Long) {

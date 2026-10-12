@@ -3,6 +3,7 @@ package com.jkjamies.omnivore.agent.runtime
 import java.io.DataInputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.InputStream
 
 /**
  * Reads probe map from .probes binary files.
@@ -13,10 +14,14 @@ object ProbeMapReader {
     private const val MAGIC = "OMNIPROB"
     private const val SUPPORTED_VERSION = 3
 
-    fun read(file: File): ProbeMap {
+    fun read(file: File): ProbeMap =
+        FileInputStream(file).buffered().use { read(it, file.name) }
+
+    /** Reads a .probes stream; [name] identifies it in error messages. Does not close [stream]. */
+    fun read(stream: InputStream, name: String): ProbeMap {
         val probeMap = ProbeMap()
 
-        DataInputStream(FileInputStream(file).buffered()).use { input ->
+        DataInputStream(stream).let { input ->
             val magic = ByteArray(8)
             input.readFully(magic)
             check(String(magic) == MAGIC) { "Invalid probe map file: bad magic" }
@@ -29,7 +34,7 @@ object ProbeMapReader {
             // user to a clean build, which is the correct fix.
             check(version == SUPPORTED_VERSION) {
                 if (version in 1 until SUPPORTED_VERSION) {
-                    "Probe map ${file.name} was written by an older Omnivore " +
+                    "Probe map $name was written by an older Omnivore " +
                         "(format v$version, expected v$SUPPORTED_VERSION). Branch probe layout " +
                         "changed; run a clean build to regenerate coverage data."
                 } else {

@@ -117,6 +117,8 @@ object OmnivoreTransformConfigurator {
                     project.logger.info("Omnivore: Could not set frames computation mode: ${e.message}")
                 }
 
+                InstrumentedTestConfigurator.registerVariantProbeMapTask(project, variant)
+
                 project.logger.info("Omnivore: Registered build-time bytecode transform for variant")
             }
         } catch (e: Exception) {
