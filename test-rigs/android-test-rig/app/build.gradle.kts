@@ -50,7 +50,7 @@ dependencies {
     implementation(project(":data"))
     implementation(project(":common"))
 
-    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
