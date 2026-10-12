@@ -131,7 +131,7 @@ subprojects {
 // build.gradle.kts (root project)
 plugins {
     id("com.android.application") version "8.8.2" apply false
-    kotlin("android") version "2.1.10" apply false
+    kotlin("android") version "2.1.10" apply false  // not needed on AGP 9+: Kotlin is built in
     id("io.github.jkjamies.omnivore")
 }
 
@@ -152,7 +152,7 @@ omnivore {
 Instrumented test coverage requires:
 
 -   An Android emulator or device connected via ADB
--   AGP 8.x+ for build-time bytecode transformation
+-   AGP 8.8.2+ (including 9.x) for build-time bytecode transformation
 -   `OmnivoreTestListener` is automatically added to the test runner
 
 #### Compose Filtering
