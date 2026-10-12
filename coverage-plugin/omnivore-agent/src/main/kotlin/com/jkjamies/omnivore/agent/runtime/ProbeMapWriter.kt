@@ -3,6 +3,7 @@ package com.jkjamies.omnivore.agent.runtime
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 
 /**
  * Writes the probe map to a binary .probes file.
@@ -41,12 +42,16 @@ object ProbeMapWriter {
 
     fun write(file: File, probeMap: ProbeMap) {
         file.parentFile?.mkdirs()
+        FileOutputStream(file).buffered().use { write(it, probeMap.getAllClassMaps()) }
+    }
 
-        DataOutputStream(FileOutputStream(file).buffered()).use { out ->
+    /** Writes [classMaps] in the .probes format. Does not close [stream]. */
+    fun write(stream: OutputStream, classMaps: Collection<ClassProbeMap>) {
+        DataOutputStream(stream).let { out ->
             out.writeBytes(MAGIC)
             out.writeShort(VERSION.toInt())
 
-            val allMaps = probeMap.getAllClassMaps()
+            val allMaps = classMaps
             out.writeInt(allMaps.size)
 
             for (classMap in allMaps) {
@@ -67,6 +72,7 @@ object ProbeMapWriter {
                     out.writeInt(probe.branchGroup)
                 }
             }
+            out.flush()
         }
     }
 }

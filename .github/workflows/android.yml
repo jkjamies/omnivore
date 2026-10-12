@@ -59,7 +59,7 @@ jobs:
       - name: Check the transform actually instrumented something
         working-directory: test-rigs/android-test-rig
         run: |
-          PROBES=build/omnivore/connectedAndroidTest/build-time.probes
+          PROBES=build/omnivore/connectedAndroidTest/build-time-app-debug.probes
           if [ ! -s "$PROBES" ]; then
             echo "::error::AGP transform produced no probe map at $PROBES."
             echo "Either OmnivoreClassVisitorFactory never ran, or it instrumented no classes."
@@ -72,6 +72,16 @@ jobs:
             echo "::error::Probe map is header-only ($SIZE bytes) — no classes were instrumented."
             exit 1
           fi
+          # The map must cover classes from :app AND from the modules it depends
+          # on. Dependency modules are instrumented by AGP's artifact transform,
+          # and their entries were once missing from the map entirely, which
+          # silently dropped their on-device coverage.
+          for PKG in presentation domain data common; do
+            if ! grep -aq "com/example/android/testrig/$PKG/" "$PROBES"; then
+              echo "::error::Probe map has no classes from the '$PKG' package."
+              exit 1
+            fi
+          done
           echo "Build-time probe map: $SIZE bytes"
 
       # This runner has no emulator, so the connected (instrumented) tests that

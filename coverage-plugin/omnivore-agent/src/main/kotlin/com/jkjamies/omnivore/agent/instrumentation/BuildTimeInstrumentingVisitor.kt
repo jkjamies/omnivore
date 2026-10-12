@@ -2,6 +2,7 @@ package com.jkjamies.omnivore.agent.instrumentation
 
 import com.jkjamies.omnivore.agent.AgentConfig
 import com.jkjamies.omnivore.agent.runtime.ClassId
+import com.jkjamies.omnivore.agent.runtime.ClassProbeMap
 import com.jkjamies.omnivore.agent.runtime.ProbeMap
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.Opcodes
@@ -67,10 +68,15 @@ class BuildTimeInstrumentingVisitor(
         }
 
         val classId = ClassId.forClassName(className)
-        val classProbeMap = probeMap?.getOrCreateClassMap(classId, className, sourceFile)
-        if (classProbeMap != null) {
-            ClassInstrumenter.buildProbeMap(this, config, classProbeMap)
-        }
+        // A fresh map per visit: the same class is transformed again by every
+        // incremental build and once per variant, and appending to a shared
+        // map duplicated its entries each time.
+        val classProbeMap = ClassProbeMap(classId, className, sourceFile)
+        ClassInstrumenter.buildProbeMap(this, config, classProbeMap)
+        probeMap?.putClassMap(classProbeMap)
+        // Travels with the instrumented class; the build reads it back from the
+        // transform's outputs. See EmbeddedProbeMap.
+        EmbeddedProbeMap.attach(this, classProbeMap)
 
         // Replay the buffered class through the instrumenting visitor. The probe
         // map was built above, so pass null here — otherwise ProbeInserter would

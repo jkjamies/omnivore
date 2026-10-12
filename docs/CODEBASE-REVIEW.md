@@ -749,6 +749,38 @@ the `omnivoreReport` console summary. `HtmlReportWriter uses a dot decimal
 separator regardless of locale` pins it by setting the default locale to `de-DE`
 for the duration of the test — verified to fail without the fix.
 
+### 3b.4 The Android probe map lost classes, and grew without bound — **high**
+
+The AGP transform collected the build-time probe map into a static
+`ProbeMap` on `OmnivoreClassVisitorFactory`, and `omnivoreWriteBuildProbeMap`
+wrote whatever had accumulated. That map lived in the Gradle daemon, not the
+build, which broke it three ways:
+
+- **Dependency modules were never in it.** With `InstrumentationScope.ALL`, AGP
+  instruments a module's dependencies through a Gradle *artifact transform*
+  whose results are cached globally, across `clean`. Those classes ran
+  instrumented on the device — the rig's APK had 41 classes carrying a probe
+  field — but only the 25 from `:app` were ever in the map, so hits in `:domain`,
+  `:data` and `:common` were silently discarded.
+- **Incremental builds shrank it.** The transform only revisits changed classes.
+  After a one-file change, a fresh daemon's map held 13 of the 25 `:app` classes.
+- **It grew forever.** Re-visiting a class appended its entries again: the file
+  went 329 KB → 523 KB → 687 KB → 850 KB → 1 MB over five builds, `clean`
+  included. The report's per-index dedup hid this from the numbers.
+
+Fixed by not collecting during the transform at all. Each instrumented class
+now carries its own probe map as a class-retention annotation
+(`EmbeddedProbeMapData`, stripped by D8), and `OmnivoreBuildProbeMapTask` reads
+them back from what AGP's transform produced for the tested variant — the
+`transform<Variant>ClassesWithAsm` outputs plus the dependencies' ASM-instrumented
+jars (`artifactType=android-asm-instrumented-jars`). Whatever the transform's
+outputs are, they carry their maps, so the result no longer depends on what this
+JVM happened to transform. Verified on the rig: identical 41-class map across
+clean, repeated, incremental and fresh-daemon builds, matching the dex exactly.
+`android.yml` now fails if the map lacks classes from any of the rig's modules.
+Maps are also written per module and variant (`build-time-<module>-<variant>.probes`)
+so two Android modules no longer overwrite each other.
+
 ### Not fixed — an operator decision, not a defect
 
 **`publish.yml` will publish any `v*` tag to Maven Central and the Gradle Plugin

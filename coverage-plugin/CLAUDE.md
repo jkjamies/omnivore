@@ -120,7 +120,7 @@ omnivore {
 - 3-tier JAR resolution: included build → Gradle configuration → fat JAR extraction (JaCoCo-inspired)
 - Registers AGP build-time bytecode transform via `OmnivoreClassVisitorFactory` using `plugins.withId()` reactive pattern
 - Configures test runner arguments (`listener`, `omnivore.destdir`, `omnivore.compose`)
-- Registers `omnivoreWriteBuildProbeMap` task — writes probe map accumulated during ASM transform
+- Registers `omnivoreWrite<Variant>BuildProbeMap` per variant with instrumented tests (`OmnivoreBuildProbeMapTask`), aggregated by `omnivoreWriteBuildProbeMap`. Each instrumented class carries its own probe map as a class-retention annotation (`EmbeddedProbeMap`, stripped by D8); the task reads them back from the variant's transform outputs and ASM-instrumented dependency jars. **Never collect probe maps as a side effect of the transform** — AGP's transform is incremental and its dependency half is a globally cached artifact transform, so a side-effect map is incomplete on most builds (`docs/CODEBASE-REVIEW.md` §3b.4)
 - Registers `omnivoreSetupDevice` task — creates writable directory on device before tests
 - Registers `omnivorePullCoverage` task (finalizer) — extracts coverage from logcat (primary), with fallback to adb pull and run-as
 - Coverage data lands in `build/omnivore/connectedAndroidTest/`
