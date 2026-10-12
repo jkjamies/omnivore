@@ -9,11 +9,11 @@ members = [
 version = "0.1.0"
 edition = "2024"
 # The minimum toolchain that can build this workspace, driven by dependencies
-# rather than by anything in our own source (askama and time both need 1.88).
+# rather than by anything in our own source (sqlx 0.9 needs 1.94).
 # Declared so `cargo build` fails with "rustc X is not supported by the
 # following packages" naming the culprit, instead of an obscure compile error —
 # and so the Dockerfile's base image pin has something to track.
-rust-version = "1.88"
+rust-version = "1.94"
 license = "Apache-2.0"
 
 [workspace.dependencies]
@@ -35,7 +35,7 @@ serde_json = "1"
 quick-xml = { version = "0.42", features = ["serialize"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "chrono"] }
 
 # Logging
 tracing = "0.1"

@@ -3,9 +3,10 @@
 # whatever built when this file was written. It was `1.86`, and the build failed
 # outright — askama 0.15 and time 0.3 both require 1.88 — but nothing ran
 # `docker build` until CI did, so the image had simply stopped being buildable.
+# Raised again to 1.94 for sqlx 0.9, which CI's docker build caught.
 # See `rust-version` in the workspace Cargo.toml, which is the declaration this
 # tracks.
-FROM rust:1.90-bookworm AS builder
+FROM rust:1.94-bookworm AS builder
 WORKDIR /app
 
 # Copy workspace files
