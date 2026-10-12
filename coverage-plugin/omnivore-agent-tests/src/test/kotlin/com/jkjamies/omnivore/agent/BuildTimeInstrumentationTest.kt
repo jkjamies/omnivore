@@ -1,6 +1,7 @@
 package com.jkjamies.omnivore.agent
 
 import com.jkjamies.omnivore.agent.instrumentation.BuildTimeInstrumentingVisitor
+import com.jkjamies.omnivore.agent.instrumentation.EmbeddedProbeMap
 import com.jkjamies.omnivore.agent.instrumentation.LoaderAwareClassWriter
 import com.jkjamies.omnivore.agent.instrumentation.OmnivoreClassTransformer
 import com.jkjamies.omnivore.agent.instrumentation.ProbeInserter
@@ -421,5 +422,59 @@ class BuildTimeInstrumentationTest {
             entries.map { it.probeIndex }.toSet().size,
             "probe indices must be unique — a duplicate means the probe map was written twice",
         )
+    }
+
+    // ---- Embedded probe maps ----
+    //
+    // AGP transforms incrementally and caches (dependency modules through a
+    // globally cached artifact transform), so the build can only see a complete
+    // probe map by reading it back from the transform's outputs. These hold the
+    // embedded copy to the same standard as the in-memory one.
+
+    @Test
+    fun `instrumented class embeds the same probe map the load-time path builds`() {
+        val name = "test/buildtime/Embedded"
+        val bytecode = generateBranchyClass(name)
+
+        val instrumented = instrumentAtBuildTime(name, bytecode)
+        val embedded = checkNotNull(EmbeddedProbeMap.read(instrumented)) { "no embedded probe map" }
+
+        val loadTimeMap = ProbeMap()
+        instrumentAtLoadTime(name, bytecode, loadTimeMap)
+
+        assertEquals(ClassId.forClassName(name), embedded.classId)
+        assertEquals(name, embedded.className)
+        assertEquals(probesOf(loadTimeMap, name), embedded.getProbes())
+    }
+
+    @Test
+    fun `transforming a class again replaces its probe map instead of appending`() {
+        // Every incremental build and every variant re-transforms the same class.
+        // The map used to be shared across all of them and grew without bound.
+        val name = "test/buildtime/Retransformed"
+        val bytecode = generateBranchyClass(name)
+        val probeMap = ProbeMap()
+
+        instrumentAtBuildTime(name, bytecode, probeMap)
+        val once = probesOf(probeMap, name)
+        instrumentAtBuildTime(name, bytecode, probeMap)
+        instrumentAtBuildTime(name, bytecode, probeMap)
+
+        assertEquals(once, probesOf(probeMap, name))
+    }
+
+    @Test
+    fun `a probe map larger than one constant-pool string survives embedding`() {
+        // Constant-pool strings cap at 65535 bytes, so big maps are chunked.
+        val name = "test/buildtime/Huge"
+        val instrumented = instrumentAtBuildTime(name, generateManyLineClass(name, 3000))
+        val embedded = checkNotNull(EmbeddedProbeMap.read(instrumented))
+        assertTrue(embedded.getProbes().size >= 3000, "expected every line probe, got ${embedded.getProbes().size}")
+    }
+
+    @Test
+    fun `classes without an embedded map read as null`() {
+        val name = "test/buildtime/Plain"
+        assertEquals(null, EmbeddedProbeMap.read(generateBranchyClass(name)))
     }
 }
