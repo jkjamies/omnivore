@@ -16,7 +16,7 @@ val jacocoEnabled = providers.gradleProperty("omnivore.jacoco").isPresent
 
 android {
     namespace = "com.example.android.testrig"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.example.android.testrig"
