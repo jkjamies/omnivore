@@ -1,6 +1,5 @@
 plugins {
-    id("com.android.application") version "8.8.2" apply false
-    kotlin("android") version "2.4.21" apply false
+    id("com.android.application") version "9.2.0" apply false
     kotlin("jvm") version "2.4.21" apply false
     kotlin("plugin.compose") version "2.4.21" apply false
     id("io.github.jkjamies.omnivore")

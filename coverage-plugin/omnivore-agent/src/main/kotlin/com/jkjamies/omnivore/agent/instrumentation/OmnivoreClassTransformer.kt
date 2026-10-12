@@ -212,21 +212,30 @@ class OmnivoreClassTransformer(
      * Check if a class originates from a test source set by inspecting its code source location.
      *
      * Standard Gradle: build/classes/{language}/{sourceSet}/
-     * AGP (Android):   build/tmp/kotlin-classes/{sourceSet}/
+     * AGP 8 (Kotlin):  build/tmp/kotlin-classes/{sourceSet}/
+     * AGP 9 (Kotlin):  build/intermediates/built_in_kotlinc/{sourceSet}/compile{...}Kotlin/classes/
+     * AGP (Java):      build/intermediates/javac/{sourceSet}/compile{...}JavaWithJavac/classes/
      *
      * Test source sets: test, testDebug, testRelease, debugUnitTest, releaseUnitTest,
      * androidTest, instrumentedTest, etc.
      */
     private fun isFromTestSourceSet(protectionDomain: ProtectionDomain?): Boolean {
         val location = protectionDomain?.codeSource?.location?.path ?: return false
-        return TEST_SOURCE_SET_PATTERN.containsMatchIn(location)
+        return isTestOutputPath(location)
     }
 
     companion object {
-        /** Matches Gradle and AGP test output directories. */
+        /**
+         * Matches Gradle and AGP test output directories. AGP 9's built-in Kotlin
+         * moved Kotlin output under intermediates/, and unit-test classes were
+         * then instrumented and reported as covered production code.
+         */
         private val TEST_SOURCE_SET_PATTERN = Regex(
-            "/(classes/[^/]+|kotlin-classes)/((test|androidTest|instrumentedTest)[^/]*|[^/]*(UnitTest|AndroidTest))(/|$)"
+            "/(classes/[^/]+|kotlin-classes|intermediates/(built_in_kotlinc|javac))/" +
+                "((test|androidTest|instrumentedTest)[^/]*|[^/]*(UnitTest|AndroidTest))(/|$)"
         )
+
+        fun isTestOutputPath(path: String): Boolean = TEST_SOURCE_SET_PATTERN.containsMatchIn(path)
 
         /**
          * Class identifier. Delegates to [ClassId] so the JVM agent and the AGP
